@@ -73,6 +73,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     /** v1.7 跟读字数小钮（跟读开时显示，如「15字」）与底部说明行 */
     private TextView btnRFollowChars;
     private TextView readerFollowHint;
+    private TextView readerPageInfo;
     private Boolean lastFollowOn = null;
     private Integer lastChunkChars = null;
     private boolean lastGapOn = false;
@@ -135,6 +136,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRFollow = findViewById(R.id.btnRFollow);
         btnRFollowChars = findViewById(R.id.btnRFollowChars);
         readerFollowHint = findViewById(R.id.readerFollowHint);
+        readerPageInfo = findViewById(R.id.readerPageInfo);
         btnRScript = findViewById(R.id.btnRScript);
         btnRPinyin = findViewById(R.id.btnRPinyin);
         btnROrient = findViewById(R.id.btnROrient);
@@ -549,6 +551,21 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                     followPaused = true;
                     followResumeAt = System.currentTimeMillis() + 6000;
                     btnFollow.setVisibility(View.VISIBLE);
+                }
+            });
+        }
+
+        /** 竖版分页页码（v1.8.0）：JS 分页引擎回报「第 X 页 / 共 Y 页」；
+         *  横版时 JS 传 (0, 0)，此处隐藏。显示在底部状态区，不遮正文。 */
+        @JavascriptInterface
+        public void pageInfo(final int curPage, final int totalPages) {
+            runOnUiThread(() -> {
+                if (readerPageInfo == null) return;
+                if (totalPages > 0 && curPage > 0) {
+                    readerPageInfo.setText("第 " + curPage + " 页 / 共 " + totalPages + " 页");
+                    readerPageInfo.setVisibility(View.VISIBLE);
+                } else {
+                    readerPageInfo.setVisibility(View.GONE);
                 }
             });
         }

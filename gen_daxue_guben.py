@@ -19,6 +19,15 @@
 5. 每句 startMs/endMs 全部换新 SRT 对应条目；audioDurationMs=714230（新音频实测 714.23 秒）。
 校验：新句与新 SRT 条目逐条去标点比对（仅上述 2 处定字句允许不一致）、拼音逐字对齐、时间单调。
 不一致即报错退出，不硬凑。
+
+v1.8.0（2026-10-16）：据《大学》PDF 全书复核报告全面按原书校正——
+分节由 8 节改按原书 12 小节重组（句数 15/8/9/11/13/6/4/26/8/15/17/11；
+BLOCKS 的 8 节分法只作取文组织、不再作分节依据；章题式注记书上没有，
+note 一律置 null）；改字 2 处（s107 儀監於殷、s120 一介臣）＋体例定案
+1 处（s79 正文作「帥」、不从旁注「率」，用户定案：正文与旁注分歧跟正文走）；
+注音 14 音节按书改。写出前与现行 daxue.json 硬校验：逐句 startMs/endMs
+全等（只许文字/拼音/分节变）、逐句繁体字数不变，并把现行包 breaks 按
+拉平位置合并回（改字均为等长一对一，break 下标仍有效）。
 """
 import json, re, os, sys
 
@@ -131,30 +140,138 @@ for m in mismatch:
     print("   第%d条 内容包=%s | SRT=%s" % m)
 assert len(mismatch) == 2 and not bad, mismatch
 
+# ---- 按书校正的辅助函数（v1.8.0）----
+def sec_num(i):
+    """1 起的小节序号 → 汉字数字（九、十、十一、二十、二十四…）"""
+    CN = "一二三四五六七八九"
+    if i < 10:
+        return CN[i - 1]
+    tens, ones = divmod(i, 10)
+    return (CN[tens - 1] if tens > 1 else "") + "十" + (CN[ones - 1] if ones else "")
+
+
+def _py_pairs(sent):
+    """textT 中每个 CJK 字与其拼音下标的配对（与 reader 的 CJK 口径一致）"""
+    pairs, k = [], 0
+    for ch in sent["textT"]:
+        if CJK.match(ch):
+            pairs.append((ch, k))
+            k += 1
+    assert k == len(sent["pinyin"]), sent["id"]
+    return pairs
+
+
+def fix_py(sent, sno, char, old, new, count=None, which=None):
+    """句内注音修正：把读 old 的 char 改读 new。count=断言命中总数；
+    which=只改第几个命中（0 起），其余保留。返回改动音节数。"""
+    hits = [k for ch, k in _py_pairs(sent)
+            if ch == char and sent["pinyin"][k] == old]
+    if which is not None:
+        assert len(hits) > which, "s%d「%s」(%s) 第 %d 处不存在" % (sno, char, old, which + 1)
+        hits = [hits[which]]
+    elif count is not None:
+        assert len(hits) == count, \
+            "s%d「%s」(%s) 命中 %d 处，与报告预期 %d 不符" % (sno, char, old, len(hits), count)
+    for k in hits:
+        sent["pinyin"][k] = new
+    return len(hits)
+
+
+def fix_text(sent, sno, old_t, new_t, old_s, new_s):
+    assert old_t in sent["textT"], "s%d 繁体未找到「%s」：%s" % (sno, old_t, sent["textT"])
+    assert old_s in sent["textS"], "s%d 简体未找到「%s」：%s" % (sno, old_s, sent["textS"])
+    sent["textT"] = sent["textT"].replace(old_t, new_t, 1)
+    sent["textS"] = sent["textS"].replace(old_s, new_s, 1)
+
+
+def apply_book_fixes(out_sents):
+    """《大学》按原书校正（PDF 全书复核报告第四节）：改字 2 处、体例定案 1 处、
+    注音 14 音节。句号为内容包句序（古本序新序）。"""
+    S = lambda n: out_sents[n - 1]
+    # 定字 2 处
+    fix_text(S(107), 107, "宜鑒於殷", "儀監於殷", "宜鉴于殷", "仪监于殷")
+    fix_text(S(120), 120, "一個臣", "一介臣", "一个臣", "一介臣")
+    # 体例定案（单独标注）：s79 书正文作「帥」、黑框旁注「率」——按用户定案
+    # 「正文与旁注分歧一律跟正文走」改作帥，音 shuài（原 lǜ 随字改）。
+    fix_text(S(79), 79, "率天下", "帥天下", "率天下", "帅天下")
+    # 报告注音条「s84 子之惡 wù→è」：经全包定位，含「子之惡」的句子实为 s65
+    # 「人莫知其子之惡」，现行包该处已读 è 与书合——断言确认，不改动；
+    # s84 本身（故治國在齊其家）无惡字。
+    s65_mo = [k for ch, k in _py_pairs(S(65)) if ch == "惡"]
+    assert len(s65_mo) == 1 and S(65)["pinyin"][s65_mo[0]] == "è", S(65)
+    # 注音 14 音节
+    n = 0
+    n += fix_py(S(13), 13, "薄", "báo", "bó", count=2)
+    n += fix_py(S(22), 22, "曾", "céng", "zēng", count=1)
+    n += fix_py(S(45), 45, "緡", "mín", "mián", count=1)
+    n += fix_py(S(59), 59, "好", "hǎo", "hào", count=1)
+    n += fix_py(S(59), 59, "樂", "lè", "yào", count=1)
+    n += fix_py(S(64), 64, "惡", "wù", "è", which=0)   # 其惡（名詞）改 è；「惡而」動詞仍 wù
+    n += fix_py(S(72), 72, "中", "zhōng", "zhòng", count=1)
+    n += fix_py(S(79), 79, "帥", "lǜ", "shuài", count=1)
+    n += fix_py(S(120), 120, "介", "gè", "jiè", count=1)
+    n += fix_py(S(127), 127, "迸", "bèng", "bǐng", count=1)
+    n += fix_py(S(131), 131, "逮", "dǎi", "dài", count=1)
+    n += fix_py(S(137), 137, "畜", "chù", "xù", count=1)
+    n += fix_py(S(138), 138, "畜", "chù", "xù", count=1)
+    assert n == 14, "注音改动 %d 音节，与报告 14 不符" % n
+    print("大学按书校正完成：定字 2 处＋体例定案 1 处（帥）＋注音 14 音节；"
+          "报告 s84 条经定位为 s65、现值已合书（断言确认）")
+
+
 # ---- 组装与校验 ----
-chapters_out = []
-n = 0
+out_sents = []
 prev = -1
-for ci, (title, note, ss) in enumerate(BLOCKS):
-    ch = {"id": "c%d" % (ci + 1), "title": title, "note": note, "sentences": []}
-    for s in ss:
-        n += 1
-        assert len(CJK.findall(s["textS"])) == len(CJK.findall(s["textT"])) == len(s["pinyin"]), s["textS"]
-        assert s["startMs"] > prev, ("时间不单调", s["textS"])
-        prev = s["startMs"]
-        ch["sentences"].append({
-            "id": "s%d" % n, "startMs": s["startMs"], "endMs": s["endMs"],
-            "textS": s["textS"], "textT": s["textT"], "pinyin": s["pinyin"]})
-    chapters_out.append(ch)
+for n, s in enumerate(flat, 1):
+    assert len(CJK.findall(s["textS"])) == len(CJK.findall(s["textT"])) == len(s["pinyin"]), s["textS"]
+    assert s["startMs"] > prev, ("时间不单调", s["textS"])
+    prev = s["startMs"]
+    out_sents.append({
+        "id": "s%d" % n, "startMs": s["startMs"], "endMs": s["endMs"],
+        "textS": s["textS"], "textT": s["textT"], "pinyin": list(s["pinyin"])})
 assert flat[-1]["endMs"] <= DUR_MS, (flat[-1]["endMs"], DUR_MS)
+
+# ---- v1.8.0 按原书校正 ----
+apply_book_fixes(out_sents)
+
+# ---- breaks 合并＋与现行包时间硬校验 ----
+# 现行 daxue.json 的 breaks 由 gen_breaks.py 生成（标点级逐字对齐），本脚本不
+# 重算，按拉平位置合并回；合并前硬校验：新旧逐句 startMs/endMs 全等（本版只许
+# 文字/拼音/分节变）、逐句繁体字数不变（改字均为等长一对一，break 下标仍有效）。
+if os.path.exists(OUT):
+    old_doc = json.load(open(OUT, encoding="utf-8"))
+    oflat = [x for c in old_doc["chapters"] for x in c["sentences"]]
+    assert len(oflat) == len(out_sents), "现行包句数不一致"
+    merged = []
+    for i, (o, nw) in enumerate(zip(oflat, out_sents), 1):
+        assert o["startMs"] == nw["startMs"] and o["endMs"] == nw["endMs"], \
+            "硬校验失败：第 %d 句时间戳与现行包不一致" % i
+        assert len(CJK.findall(o["textT"])) == len(CJK.findall(nw["textT"])), \
+            "第 %d 句字数变化，breaks 不能按位合并" % i
+        d = {"id": nw["id"], "startMs": nw["startMs"], "endMs": nw["endMs"]}
+        if o.get("breaks"):
+            d["breaks"] = o["breaks"]
+        d["textS"], d["textT"], d["pinyin"] = nw["textS"], nw["textT"], nw["pinyin"]
+        merged.append(d)
+    out_sents = merged
+    print("breaks 合并完成，与现行包 143 句时间戳硬校验通过")
+
+# ---- 按原书 12 小节重组（书上无章题，note 置 null）----
+GROUPS = [15, 8, 9, 11, 13, 6, 4, 26, 8, 15, 17, 11]
+assert sum(GROUPS) == 143
+chapters_out, pos = [], 0
+for gi, cnt in enumerate(GROUPS, 1):
+    chapters_out.append({"id": "c%d" % gi, "title": "第" + sec_num(gi) + "節",
+                         "note": None, "sentences": out_sents[pos:pos + cnt]})
+    pos += cnt
 
 doc = {"bookId": "daxue", "title": "大學", "audioDurationMs": DUR_MS, "chapters": chapters_out}
 with open(OUT, "w", encoding="utf-8") as f:
     json.dump(doc, f, ensure_ascii=False, indent=1)
 print("写出 %s | 节数 %d | 总句数 %d | 末句 endMs=%d（音频 %d）" %
-      (OUT, len(chapters_out), n, flat[-1]["endMs"], DUR_MS))
+      (OUT, len(chapters_out), len(out_sents), flat[-1]["endMs"], DUR_MS))
 for ch in chapters_out:
-    print("  %s %s（%s）%d 句 | 首句 %s | 末句 %s" %
-          (ch["id"], ch["title"], ch["note"], len(ch["sentences"]),
+    print("  %s %s %d 句 | 首句 %s | 末句 %s" %
+          (ch["id"], ch["title"], len(ch["sentences"]),
            ch["sentences"][0]["textT"][:16], ch["sentences"][-1]["textT"][:16]))
 print("OK")

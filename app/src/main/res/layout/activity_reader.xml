@@ -241,5 +241,16 @@
             android:textColor="#9C9484"
             android:textSize="11sp"
             android:visibility="gone" />
+
+        <!-- 竖版分页页码（v1.8.0）：仅竖排时由 JS 桥回报后显示，不遮正文 -->
+        <TextView
+            android:id="@+id/readerPageInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:gravity="center"
+            android:textColor="#9C9484"
+            android:textSize="11sp"
+            android:visibility="gone" />
     </LinearLayout>
 </LinearLayout>

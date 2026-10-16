@@ -35,10 +35,16 @@ body.vert .note{margin:0 .3em 0 .6em;}
 body.vert .s.cur{background:rgba(158,59,43,.12);border-bottom-color:transparent;border-left:2px solid #9E3B2B;}
 body.vert .s.cur.gap{background:rgba(169,124,44,.20);border-left-style:dashed;}
 body.vert p{text-align:start;}
+/* 竖版分页（v1.8.0）：页面静止——禁止手势自由滚动（程序滚动翻页不受影响） */
+body.vert{touch-action:none;overscroll-behavior:none;}
+/* 左缘翻页提示：只在左缘中部留一个 ≤20dp 的淡色小箭头，不占正文列宽（正文仍按全宽排） */
+#pgHint{display:none;position:fixed;left:3px;top:50%;transform:translateY(-50%);font-size:22px;line-height:1;color:rgba(38,34,28,.20);pointer-events:none;z-index:5;}
+body.vert #pgHint{display:block;}
 </style>
 </head>
 <body class="__CLASSES__">
 <div class="txt" id="txt"></div>
+<div id="pgHint">‹</div>
 <script>
 var BOOK = __BOOK_JSON__;
 var stateTrad = __TRAD__;
@@ -92,6 +98,70 @@ function pageToSentence(el){
   if (sentenceVisible(el)) return;
   el.scrollIntoView({block:'start', inline:'nearest'});
 }
+/* ===== 竖版分页（v1.8.0，用户定案：一屏一页、页面静止、像翻书）=====
+   原理：竖排下整幅正文是从右往左延展的长卷，窗口横向滚动。页宽 = 视口宽 W；
+   句子位置用「距长卷起始边（右端）的距离 d」度量：d = txtRect.right - elRect.right
+   （两 rect 随滚动同移，d 与滚动位置无关）；页号 = floor(d / W)，固定页格。
+   翻页 = window.scrollTo 到该页的 scrollLeft：Chromium 竖排（vertical-rl）是
+   负值模型，第 k 页 scrollLeft = -k*W，behavior:'smooth' 即横向滑动动画。
+   当前句只原地变色高亮、绝不自动滚动；仅当播放/跟读推进到的句子不在当前页
+   时才翻页。手动翻页（点左/右缘 28px 热区或左右滑）走 flipPage，并通知原生侧
+   暂停跟随（与既有 userScrolled 机制一致）。横版一律不走这套逻辑。 */
+var pgCur = 0, pgTotal = 0;
+function isVert(){ return document.body.classList.contains('vert'); }
+function txtEl(){ return document.getElementById('txt'); }
+function contentWidth(){
+  var tr = txtEl().getBoundingClientRect();
+  var w = tr.width;
+  var fin = document.getElementById('fin');
+  if (fin) w = Math.max(w, tr.right - fin.getBoundingClientRect().left);
+  return w;
+}
+function vertMeasure(){
+  pgTotal = Math.max(1, Math.ceil(contentWidth() / window.innerWidth));
+}
+function pageOfSentence(el){
+  var tr = txtEl().getBoundingClientRect();
+  var r = el.getBoundingClientRect();
+  var p = Math.floor((tr.right - r.right) / window.innerWidth);
+  return Math.max(0, Math.min(pgTotal - 1, p));
+}
+function reportPage(){
+  if (window.Bridge && Bridge.pageInfo)
+    Bridge.pageInfo(isVert() ? pgCur + 1 : 0, isVert() ? pgTotal : 0);
+}
+function goPage(k, animate){
+  if (!isVert()) return;
+  vertMeasure();
+  k = Math.max(0, Math.min(pgTotal - 1, k));
+  pgCur = k;
+  window.scrollTo({left: -k * window.innerWidth, behavior: animate ? 'smooth' : 'auto'});
+  reportPage();
+}
+function vertFollow(el){
+  vertMeasure();
+  var p = pageOfSentence(el);
+  if (p !== pgCur) goPage(p, true);
+}
+/* 布局变化（字号/注音/繁简重渲/旋转）后重新分页，并回到当前句所在页（无当前句则保持页号、越界钳制） */
+function repaginate(){
+  if (!isVert()){ reportPage(); return; }
+  vertMeasure();
+  var target = pgCur;
+  if (cur >= 0){
+    var el = document.getElementById('si' + cur);
+    if (el) target = pageOfSentence(el);
+  }
+  goPage(target, false);
+}
+function flipPage(dir, manual){
+  if (!isVert()) return;
+  vertMeasure();
+  var k = pgCur + dir;
+  if (k < 0 || k > pgTotal - 1) return;
+  goPage(k, true);
+  if (manual) Bridge.userScrolled();
+}
 function markCur(i, scroll){
   if (cur >= 0){
     var p = document.getElementById('si' + cur);
@@ -103,7 +173,7 @@ function markCur(i, scroll){
     if (el){
       el.classList.add('cur');
       if (gapOn) el.classList.add('gap');
-      if (scroll) pageToSentence(el);
+      if (scroll){ if (isVert()) vertFollow(el); else pageToSentence(el); }
     }
   }
 }
@@ -147,6 +217,7 @@ function render(){
       Bridge.finishRead();
     });
     if (cur >= 0) markCur(cur, false);
+    repaginate();
   }
   if (i < parts.length) setTimeout(step, 0); else step();
 }
@@ -154,16 +225,32 @@ function setTrad(t){ stateTrad = t; render(); }
 function setFont(i){
   document.body.classList.remove('fs0','fs1','fs2','fs3');
   document.body.classList.add('fs' + i);
+  requestAnimationFrame(repaginate);
 }
-function setPinyin(on){ document.body.classList.toggle('nopy', !on); }
-function setVert(v){ document.body.classList.toggle('vert', v); }
+function setPinyin(on){
+  document.body.classList.toggle('nopy', !on);
+  requestAnimationFrame(repaginate);
+}
+function setVert(v){
+  document.body.classList.toggle('vert', v);
+  if (v){ requestAnimationFrame(repaginate); }
+  else { pgCur = 0; reportPage(); }
+}
 function goTop(){
+  if (isVert()){ goPage(0, false); return; }
   window.scrollTo(0, 0);
   var e = document.querySelector('section.ch');
   if (e) e.scrollIntoView();
 }
 document.addEventListener('click', function(e){
   if (immersive){ immersive = false; Bridge.setImmersive(false); return; }
+  if (isVert()){
+    if (justSwiped()) return;
+    /* 点左/右缘热区翻页（左 = 下一页、右 = 上一页，同竖排书翻页方向）；
+       热区全透明、不占正文列宽，仅左缘中部有一个淡色小箭头提示 */
+    if (e.clientX <= 28){ flipPage(1, true); return; }
+    if (e.clientX >= window.innerWidth - 28){ flipPage(-1, true); return; }
+  }
   var t = e.target;
   var s = t.closest ? t.closest('.s') : null;
   if (s){
@@ -177,6 +264,30 @@ document.addEventListener('click', function(e){
 });
 document.addEventListener('touchmove', function(){ Bridge.userScrolled(); }, {passive:true});
 document.addEventListener('wheel', function(){ Bridge.userScrolled(); }, {passive:true});
+/* 竖版：左右滑翻页（内容跟随手指方向：右滑露出下一页、左滑回上一页）；
+   滑动后 350ms 内的合成 click 不再当作点按处理 */
+var tsX = 0, tsY = 0, swipeAt = 0;
+function justSwiped(){ return Date.now() - swipeAt < 350; }
+document.addEventListener('touchstart', function(e){
+  if (e.touches.length === 1){ tsX = e.touches[0].clientX; tsY = e.touches[0].clientY; }
+}, {passive:true});
+document.addEventListener('touchend', function(e){
+  if (!isVert() || !e.changedTouches.length) return;
+  var dx = e.changedTouches[0].clientX - tsX;
+  var dy = e.changedTouches[0].clientY - tsY;
+  if (Math.abs(dx) >= 48 && Math.abs(dx) > 1.4 * Math.abs(dy)){
+    flipPage(dx > 0 ? 1 : -1, true);
+    swipeAt = Date.now();
+  }
+}, {passive:true});
+/* 竖版禁止滚轮把长卷拖离页格（程序翻页不受影响） */
+document.addEventListener('wheel', function(e){ if (isVert()) e.preventDefault(); }, {passive:false});
+/* 旋转/窗口尺寸变化后重新分页，回到当前句所在页 */
+var rszT = 0;
+window.addEventListener('resize', function(){
+  clearTimeout(rszT);
+  rszT = setTimeout(repaginate, 120);
+});
 render();
 </script>
 </body>
