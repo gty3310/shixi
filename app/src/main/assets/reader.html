@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#F8F5EF;color:#26221C;}
+body{font-family:"Noto Serif CJK SC","Noto Serif SC","Songti SC",serif;}
+.txt{padding:16px 20px 26px;line-height:2.15;}
+body.fs0 .txt{font-size:18px}
+body.fs1 .txt{font-size:21px}
+body.fs2 .txt{font-size:25px}
+body.fs3 .txt{font-size:30px}
+ruby rt{font-size:.40em;color:#9a8f7d;}
+body.nopy rt{display:none}
+body.nopy .txt{line-height:1.95}
+section.ch h2{font-size:1.02em;line-height:1.5;color:#9E3B2B;margin:1.1em 0 .45em;font-weight:700;letter-spacing:.04em;}
+section.ch:first-child h2{margin-top:.15em}
+.note{font-size:.72em;color:#A97C2C;margin:-.25em 0 .55em;}
+p{margin:0;text-align:justify;}
+.s{border-bottom:2px solid transparent;padding-bottom:1px;scroll-margin-top:14px;}
+body.vert .s{scroll-margin-top:0;scroll-margin-right:14px;}
+.s.cur{background:rgba(158,59,43,.14);border-bottom-color:#9E3B2B;}
+/* 跟读 gap 阶段（v1.4.3）：当前句保持高亮但换金黄底＋虚线下划线，提示「轮到你复诵」 */
+.s.cur.gap{background:rgba(169,124,44,.22);border-bottom-style:dashed;}
+.s.na{color:#7d766b;}
+#fin{text-align:center;padding:2.4em 0 3.2em;}
+.finline{color:#8A8174;font-size:.8em;margin-bottom:1.1em;}
+#finBtn{font-family:inherit;font-size:.85em;color:#9E3B2B;background:#FFFFFF;border:1px solid #9E3B2B;border-radius:999px;padding:.7em 1.6em;}
+/* 竖排：列从右往左、字自上而下；拼音由 ruby 自然落到每字右侧；高亮句左侧朱砂竖线 */
+body.vert .txt{writing-mode:vertical-rl;-webkit-writing-mode:vertical-rl;height:100vh;padding:22px 18px;}
+body.vert section.ch h2{margin:0 .35em 0 .95em;}
+body.vert .note{margin:0 .3em 0 .6em;}
+body.vert .s.cur{background:rgba(158,59,43,.12);border-bottom-color:transparent;border-left:2px solid #9E3B2B;}
+body.vert .s.cur.gap{background:rgba(169,124,44,.20);border-left-style:dashed;}
+body.vert p{text-align:start;}
+</style>
+</head>
+<body class="__CLASSES__">
+<div class="txt" id="txt"></div>
+<script>
+var BOOK = __BOOK_JSON__;
+var stateTrad = __TRAD__;
+var cur = -1;
+var gapOn = false;
+var immersive = false;
+var flat = [];
+BOOK.chapters.forEach(function(ch){
+  ch.sentences.forEach(function(s){ s._i = flat.length; flat.push(s); });
+});
+function isCJK(c){
+  var n = c.codePointAt(0);
+  /* 含扩展区（论语有少量扩展 B–J 区生僻字，如简体「𫐐/𬶍」） */
+  return (n >= 0x4E00 && n <= 0x9FFF) || (n >= 0x3400 && n <= 0x4DBF) ||
+         (n >= 0x20000 && n <= 0x323AF);
+}
+function esc(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function sentHTML(s){
+  var text = stateTrad ? s.textT : s.textS;
+  var pi = 0, out = '';
+  /* 按码点遍历：扩展区字是 UTF-16 代理对，按下标遍历会把一个字拆成两半 */
+  for (const c of text){
+    if (isCJK(c)){
+      var py = (s.pinyin && pi < s.pinyin.length) ? s.pinyin[pi] : '';
+      pi++;
+      out += py ? '<ruby>' + c + '<rt>' + esc(py) + '</rt></ruby>' : c;
+    } else {
+      out += esc(c);
+    }
+  }
+  return '<span class="s' + (s.noAudio ? ' na' : '') + '" id="si' + s._i +
+         '" data-i="' + s._i + '">' + out + '</span>';
+}
+/* 翻页式跟随（v1.4.2，用户要求像读书翻页，不要当前句永远居中）：
+   - 当前句完整落在可视区内 → 绝不滚动；
+   - 当前句跑出可视区（横排在上方/下方之外、竖排在左侧/右侧之外，含 seek 回前面）
+     → 一次性翻一页：scrollIntoView({block:'start'}) 让它落到新一页的页首——
+     横排 block start = 视口顶部（scroll-margin-top 留 14px 边距）；
+     竖排 writing-mode 下 block 轴为右→左，block start = 视口右端
+     （scroll-margin-right 留 14px 边距），即句的起始边贴到页首。 */
+function sentenceVisible(el){
+  var r = el.getBoundingClientRect();
+  if (document.body.classList.contains('vert')){
+    return r.left >= -1 && r.right <= window.innerWidth + 1;
+  }
+  return r.top >= -1 && r.bottom <= window.innerHeight + 1;
+}
+function pageToSentence(el){
+  if (sentenceVisible(el)) return;
+  el.scrollIntoView({block:'start', inline:'nearest'});
+}
+function markCur(i, scroll){
+  if (cur >= 0){
+    var p = document.getElementById('si' + cur);
+    if (p){ p.classList.remove('cur'); p.classList.remove('gap'); }
+  }
+  cur = i;
+  if (i >= 0){
+    var el = document.getElementById('si' + i);
+    if (el){
+      el.classList.add('cur');
+      if (gapOn) el.classList.add('gap');
+      if (scroll) pageToSentence(el);
+    }
+  }
+}
+function setCur(i, scroll){ markCur(i, scroll); }
+/* 跟读 gap 标记（v1.4.3）：只改当前句的呈现，不动高亮位置与翻页跟随 */
+function setGap(on){
+  gapOn = !!on;
+  if (cur >= 0){
+    var el = document.getElementById('si' + cur);
+    if (el) el.classList.toggle('gap', gapOn);
+  }
+}
+function render(){
+  /* v1.5 分批渲染：论语单篇最长约 130 句、带注音的 DOM 节点数千，先出前两章
+     立即可读，其余每批 4 章在后续帧补齐（元素齐了之后再补发一次当前句高亮），
+     避免一次性 innerHTML 上万节点卡住首屏。大学/中庸章数少，行为与旧版无异。 */
+  var parts = [];
+  BOOK.chapters.forEach(function(ch){
+    var h = '<section class="ch"><h2>' + esc(ch.title) + '</h2>';
+    if (ch.note) h += '<div class="note">' + esc(ch.note) + '</div>';
+    h += '<p>';
+    ch.sentences.forEach(function(s){ h += sentHTML(s); });
+    h += '</p></section>';
+    parts.push(h);
+  });
+  var finH = '<div id="fin"><div class="finline">—— 全文完 ——</div>' +
+       '<button id="finBtn" type="button">已读到末尾 · 点此记一遍</button></div>';
+  var el = document.getElementById('txt');
+  var i = Math.min(2, parts.length);
+  el.innerHTML = parts.slice(0, i).join('');
+  function step(){
+    if (i < parts.length){
+      el.insertAdjacentHTML('beforeend', parts.slice(i, i + 4).join(''));
+      i += 4;
+      setTimeout(step, 0);
+      return;
+    }
+    el.insertAdjacentHTML('beforeend', finH);
+    document.getElementById('finBtn').addEventListener('click', function(e){
+      e.stopPropagation();
+      Bridge.finishRead();
+    });
+    if (cur >= 0) markCur(cur, false);
+  }
+  if (i < parts.length) setTimeout(step, 0); else step();
+}
+function setTrad(t){ stateTrad = t; render(); }
+function setFont(i){
+  document.body.classList.remove('fs0','fs1','fs2','fs3');
+  document.body.classList.add('fs' + i);
+}
+function setPinyin(on){ document.body.classList.toggle('nopy', !on); }
+function setVert(v){ document.body.classList.toggle('vert', v); }
+function goTop(){
+  window.scrollTo(0, 0);
+  var e = document.querySelector('section.ch');
+  if (e) e.scrollIntoView();
+}
+document.addEventListener('click', function(e){
+  if (immersive){ immersive = false; Bridge.setImmersive(false); return; }
+  var t = e.target;
+  var s = t.closest ? t.closest('.s') : null;
+  if (s){
+    var i = parseInt(s.getAttribute('data-i'), 10);
+    if (s.classList.contains('na')) Bridge.naTap(); else Bridge.sentence(i);
+    return;
+  }
+  if (t.closest && t.closest('#fin')) return;
+  immersive = true;
+  Bridge.setImmersive(true);
+});
+document.addEventListener('touchmove', function(){ Bridge.userScrolled(); }, {passive:true});
+document.addEventListener('wheel', function(){ Bridge.userScrolled(); }, {passive:true});
+render();
+</script>
+</body>
+</html>

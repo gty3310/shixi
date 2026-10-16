@@ -1,0 +1,7 @@
+build/
+.venv-gen/
+__pycache__/
+local.properties
+*.apk
+# 诵读音频不在仓库中（版权与体积原因），见 README「内容与音频」
+app/src/main/res/raw/*.mp3

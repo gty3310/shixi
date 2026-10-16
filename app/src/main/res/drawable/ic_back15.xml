@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 后退 15 秒：逆时针环形箭头（单色，自绘矢量，替代彩色 emoji ⏪） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M8.25,6.5 A7.5,7.5 0 1,0 15.75,6.5"
+        android:strokeWidth="2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M5.3,8.2 L10.02,8.37 L7.52,4.03 Z" />
+</vector>
