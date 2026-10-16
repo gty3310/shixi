@@ -52,6 +52,12 @@ import java.time.LocalDate;
  *  seek / ±15 秒 / 点句播放统一在 seekToPosition 后按落点重新同步当前句；
  *  切歌复位状态机，新曲无原文则跟读自动关。开关持久化（follow_prefs），
  *  冷启动只恢复开关态，不自动开播——播起来后状态机按当前位置自动接上。
+ *
+ * v1.8.1 跟读停止点（foStop）：旧行为在段自身 endMs 停、gap 后 seek 到下一段 startMs，
+ *  两点之间的音频（大学同节句间平均约 0.5 秒）被整段跳过、切点误差吃掉的字永远听不到。
+ *  改为：本段末句与下一段首句同小节 → 实际停止点＝下一段 startMs（完全重合）；
+ *  跨小节、最后一段 → 仍停在本段 endMs，小节间停顿保持原样。内容包数据不改，
+ *  普通连续播放不走此逻辑。gap 仍按 foStop 口径的实际播过时长推算。
  */
 public class PlayerService extends Service {
     public static final String ACTION_PLAY_TRACK = "com.ti.songdu.PLAY_TRACK";
@@ -126,6 +132,10 @@ public class PlayerService extends Service {
     private String foTrackId = null;
     private long[] foStart = null;
     private long[] foEnd = null;
+    /** v1.8.1 每段的实际停止点：与下一段同小节时＝下一段 startMs（切点与下一句起点
+     *  完全重合，句间音频一帧不跳）；跨小节或最后一段时＝本段自身 endMs（小节间停顿
+     *  保持原样）。与 foStart/foEnd 同建同废，状态机判定段末与算 gap 都用它 */
+    private long[] foStop = null;
     /** 每段的起止句在拉平句表中的下标（高亮联动：播放中报段首句、gap 报段末句） */
     private int[] foFirst = null;
     private int[] foLast = null;
@@ -262,6 +272,7 @@ public class PlayerService extends Service {
         foTrackId = null;
         foStart = null;
         foEnd = null;
+        foStop = null;
         foFirst = null;
         foLast = null;
         if (!followEnabled) {
@@ -302,11 +313,23 @@ public class PlayerService extends Service {
         foTrackId = current.id;
         foStart = null;
         foEnd = null;
+        foStop = null;
         foFirst = null;
         foLast = null;
         // v1.5：统一走 bookForTrack（论语返回单篇 Book，跟读轴即该篇篇内时间轴）
         ContentRepo.Book b = ContentRepo.bookForTrack(getApplicationContext(), current);
         if (b == null) return false;
+        // v1.8.1 拉平下标 → 小节号映射（flat 与 chapters 内顺序一致）；对不上账则
+        // chapterMapOk=false，foStop 全部退回本段 endMs（即 v1.8.0 以前的行为），不冒险跨节延长
+        int[] flatChapter = new int[b.flat.size()];
+        int flatSeen = 0;
+        for (int ci = 0; ci < b.chapters.size(); ci++) {
+            for (int k = 0; k < b.chapters.get(ci).sentences.size(); k++) {
+                if (flatSeen < flatChapter.length) flatChapter[flatSeen] = ci;
+                flatSeen++;
+            }
+        }
+        boolean chapterMapOk = flatSeen == b.flat.size();
         double scale = ContentRepo.scaleFor(current, b);
         java.util.List<FollowChunker.SIn> sins = new java.util.ArrayList<>();
         for (int i = 0; i < b.flat.size(); i++) {
@@ -325,6 +348,7 @@ public class PlayerService extends Service {
         if (chunks.isEmpty()) return false;
         foStart = new long[chunks.size()];
         foEnd = new long[chunks.size()];
+        foStop = new long[chunks.size()];
         foFirst = new int[chunks.size()];
         foLast = new int[chunks.size()];
         for (int i = 0; i < chunks.size(); i++) {
@@ -332,6 +356,19 @@ public class PlayerService extends Service {
             foEnd[i] = chunks.get(i).endMs;
             foFirst[i] = chunks.get(i).firstFlat;
             foLast[i] = chunks.get(i).lastFlat;
+        }
+        // v1.8.1 实际停止点：本段末句与下一段首句同小节 → 停到下一段起点（重合）；
+        // 跨小节、最后一段 → 停在本段自身句末
+        for (int i = 0; i < chunks.size(); i++) {
+            boolean sameChapter = false;
+            if (i + 1 < chunks.size() && chapterMapOk) {
+                int lastF = foLast[i], firstN = foFirst[i + 1];
+                if (lastF >= 0 && lastF < flatChapter.length
+                        && firstN >= 0 && firstN < flatChapter.length) {
+                    sameChapter = flatChapter[lastF] == flatChapter[firstN];
+                }
+            }
+            foStop[i] = sameChapter ? foStart[i + 1] : foEnd[i];
         }
         return true;
     }
@@ -392,7 +429,9 @@ public class PlayerService extends Service {
             followIndex = -1;
             return;
         }
-        if (pos < foStart[followIndex] - 300 || pos > foEnd[followIndex] + 300) {
+        // v1.8.1 容差与段末判定都按实际停止点 foStop（同节内已延长到下一段起点）：
+        // 若还按 foEnd+300 判越界，同节句间停顿 >300ms 时会在延长区被误判 seek 而跳段
+        if (pos < foStart[followIndex] - 300 || pos > foStop[followIndex] + 300) {
             // 位置被外部 seek 拉出当前句范围（seek 入口已同步过，这里是兜底）：重新同步
             int idx = followIndexForPosition(pos);
             if (idx < 0) {
@@ -404,12 +443,14 @@ public class PlayerService extends Service {
             followIndex = idx;
             followSegFrom = pos;
         }
-        if (pos >= foEnd[followIndex]) {
+        if (pos >= foStop[followIndex]) {
             onFollowSentenceEnd();
         }
     }
 
-    /** 当前句播完：最后一句走整曲完成；否则暂停并进入 gap（时长＝本段实际播过/倍速 ×1.5） */
+    /** 当前段播完：最后一段走整曲完成；否则暂停并进入 gap（时长＝本段实际播过/倍速 ×1.5）。
+     *  v1.8.1「实际播过」按 foStop 口径：同节内播满到下一段起点才停，延长的那截
+     *  句间音频用户确实听到了，计入时长才与「gap＝刚才听到的真实时长×1.5」自洽 */
     private void onFollowSentenceEnd() {
         int idx = followIndex;
         if (idx < 0 || foEnd == null || idx >= foEnd.length) {
@@ -418,13 +459,14 @@ public class PlayerService extends Service {
             return;
         }
         if (idx >= foStart.length - 1) {
-            // 最后一句：先暂停封住 MediaPlayer 自己的 completion，再接管完成处理
+            // 最后一段：先暂停封住 MediaPlayer 自己的 completion，再接管完成处理
             followFinishGuard = true;
             pausePlayer();
             finishFollowPass();
             return;
         }
-        long gapMs = (long) ((foEnd[idx] - followSegFrom) / store.speed * FOLLOW_GAP_FACTOR);
+        long stopAt = (foStop != null && idx < foStop.length) ? foStop[idx] : foEnd[idx];
+        long gapMs = (long) ((stopAt - followSegFrom) / store.speed * FOLLOW_GAP_FACTOR);
         if (gapMs < 300) gapMs = 300;
         pausePlayer();
         followPhase = FOLLOW_GAP;
@@ -496,6 +538,7 @@ public class PlayerService extends Service {
         foTrackId = null;
         foStart = null;
         foEnd = null;
+        foStop = null;
         foFirst = null;
         foLast = null;
         if (followEnabled && current != null && ContentRepo.bookIdFor(current) == null) {
