@@ -626,7 +626,7 @@ public class PlayerService extends Service {
         if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
             NotificationChannel ch = new NotificationChannel(
                     CHANNEL_ID, "播放", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("诵读播放状态");
+            ch.setDescription("时习播放状态");
             nm.createNotificationChannel(ch);
         }
     }
@@ -959,7 +959,7 @@ public class PlayerService extends Service {
 
     // ---------- 通知 ----------
     private Notification buildNotification() {
-        String title = current != null ? current.title : "诵读";
+        String title = current != null ? current.title : "时习";
         // 副文本位放当前音频的统计串（今日/昨日/本周/上周/本月），与首页卡片同口径；
         // 每次计数变化、切歌、播放/暂停都会重建通知刷新这串数字
         String text = current == null ? "打开应用选择音频开始播放"

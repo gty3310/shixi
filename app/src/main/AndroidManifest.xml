@@ -14,7 +14,7 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="诵读"
+        android:label="时习"
         android:theme="@style/Theme.Songdu">
 
         <activity

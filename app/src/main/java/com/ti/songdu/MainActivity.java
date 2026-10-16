@@ -391,7 +391,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         btnCopy.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("诵读进度", et.getText().toString()));
+                cm.setPrimaryClip(ClipData.newPlainText("时习进度", et.getText().toString()));
                 Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
             }
             dialog.dismiss();

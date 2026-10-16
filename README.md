@@ -47,4 +47,4 @@ Shixi is an AI reader built for mastering classical texts through recitation, st
 
 ## 版本 Version
 
-当前版本 v1.7.0（跟读字数分段＋标点级时间戳）。应用显示名「诵读」，包名 `com.ti.songdu`；项目名「时习 Shixi」自开源版起用。
+当前版本 v1.7.1（跟读字数分段＋标点级时间戳）。应用显示名与项目名同为「时习 Shixi」（v1.7.1 起由「诵读」更名），包名 `com.ti.songdu`。
