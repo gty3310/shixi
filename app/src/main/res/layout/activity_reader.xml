@@ -242,6 +242,19 @@
             android:textSize="11sp"
             android:visibility="gone" />
 
+        <!-- v1.8.5 跟读调试读数：仅跟读开启时显示（过冲/落点实测），与说明行同风格 -->
+        <TextView
+            android:id="@+id/readerFollowDebug"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:gravity="center"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp"
+            android:textColor="#9C9484"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
         <!-- 竖版分页页码（v1.8.0）：仅竖排时由 JS 桥回报后显示，不遮正文 -->
         <TextView
             android:id="@+id/readerPageInfo"

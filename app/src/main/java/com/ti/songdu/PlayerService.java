@@ -146,6 +146,21 @@ public class PlayerService extends Service {
     /** 每段的起止句在拉平句表中的下标（高亮联动：播放中报段首句、gap 报段末句） */
     private int[] foFirst = null;
     private int[] foLast = null;
+    // ---------- v1.8.5 跟读调试读数（纯旁路采样：只读不写判定量，不参与任何跟读判定） ----------
+    /** 停止过冲统计：followStep 判定 pos>=foStop 触发段末的那一刻采样 pos−foStop（ms）。
+     *  last 最近一次 / sum 累计和（平均＝sum/count）/ max 最大值 / count 样本数（段数） */
+    public long foDbgOverLast = 0;
+    public long foDbgOverSum = 0;
+    public long foDbgOverMax = 0;
+    public int foDbgOverCount = 0;
+    /** 恢复落点误差：advanceFollowSentence seek+start 后，followStep 首个位置样本
+     *  pos−foStart[next]（ms，可负＝落点偏早）。读数含最多一拍轮询（50ms×倍速）的
+     *  播放前进量，是落点误差的上限估计。last 最近一次 / sum+count 供平均 */
+    public long foDbgSeekLast = 0;
+    public long foDbgSeekSum = 0;
+    public int foDbgSeekCount = 0;
+    /** 待采的恢复落点目标（advance 设置、followStep 首样本消费后置 -1）；-1＝无待采 */
+    private long foDbgSeekTarget = -1;
     private boolean followLoopPosted = false;
     private final Runnable followTick = new Runnable() {
         @Override
@@ -254,10 +269,47 @@ public class PlayerService extends Service {
         followIndex = -1;
         followGapPaused = false;
         followFinishGuard = false;
+        resetFollowDebugStats(); // v1.8.5：开关一动，调试读数清零重测
         if (on) startFollowLoop();
         else stopFollowLoop();
         updateNotification();
         notifyState();
+    }
+
+    /** v1.8.5 调试读数清零（跟读开关打开时调用，见 setFollowEnabled） */
+    private void resetFollowDebugStats() {
+        foDbgOverLast = 0;
+        foDbgOverSum = 0;
+        foDbgOverMax = 0;
+        foDbgOverCount = 0;
+        foDbgSeekLast = 0;
+        foDbgSeekSum = 0;
+        foDbgSeekCount = 0;
+        foDbgSeekTarget = -1;
+    }
+
+    /** v1.8.5 调试读数一行文案（界面轮询时取用；跟读关时界面不显示这一行）。
+     *  落点读数含最多一拍轮询（50ms×倍速）的播放前进量，为上限估计 */
+    public String followDebugText() {
+        if (foDbgOverCount <= 0 && foDbgSeekCount <= 0) {
+            return "调试 暂无数据，跟读一段后显示";
+        }
+        StringBuilder sb = new StringBuilder("调试 ");
+        if (foDbgOverCount > 0) {
+            sb.append("过冲 最近 ").append(foDbgOverLast)
+                    .append("ms · 平均 ").append(foDbgOverSum / foDbgOverCount)
+                    .append(" · 最大 ").append(foDbgOverMax)
+                    .append("（").append(foDbgOverCount).append("段）");
+        } else {
+            sb.append("过冲 暂无");
+        }
+        sb.append("｜落点 ");
+        if (foDbgSeekCount > 0) {
+            sb.append(foDbgSeekLast).append("ms");
+        } else {
+            sb.append("暂无");
+        }
+        return sb.toString();
     }
 
     /** 阅读页高亮联动用：当前跟读段的代表句在全书拉平顺序中的下标，无则 -1。
@@ -424,6 +476,19 @@ public class PlayerService extends Service {
             return;
         }
         long pos = currentPosition();
+        // v1.8.5 调试采样（旁路）：advance 恢复后的首个位置样本 → 落点误差，采完即清，
+        // 不重复采；纯记录，不影响下面任何判定
+        if (foDbgSeekTarget >= 0) {
+            long dbgTarget = foDbgSeekTarget;
+            foDbgSeekTarget = -1;
+            try {
+                long err = pos - dbgTarget;
+                foDbgSeekLast = err;
+                foDbgSeekSum += err;
+                foDbgSeekCount++;
+            } catch (Exception ignored) {
+            }
+        }
         if (followPhase == FOLLOW_IDLE) {
             int idx = followIndexForPosition(pos);
             if (idx >= 0) {
@@ -458,6 +523,16 @@ public class PlayerService extends Service {
             followSegFrom = pos;
         }
         if (pos >= foStop[followIndex]) {
+            // v1.8.5 调试采样（旁路）：就在这个判定点记过冲＝pos−foStop，
+            // 是全工程唯一采样点（onFollowSentenceEnd 的其他调用路径不经此处、不误记）
+            try {
+                long over = pos - foStop[followIndex];
+                foDbgOverLast = over;
+                foDbgOverSum += over;
+                if (over > foDbgOverMax) foDbgOverMax = over;
+                foDbgOverCount++;
+            } catch (Exception ignored) {
+            }
             onFollowSentenceEnd();
         }
     }
@@ -514,6 +589,9 @@ public class PlayerService extends Service {
                 }
                 playing = true;
             }
+            // v1.8.5 调试采样（旁路）：记下本次恢复的目标起点，followStep 的
+            // 首个位置样本与它作差得落点误差（只记目标，不改 seek/start 行为）
+            foDbgSeekTarget = foStart[next];
         }
         updateNotification();
         notifyState();
@@ -549,6 +627,7 @@ public class PlayerService extends Service {
         followIndex = -1;
         followGapPaused = false;
         followFinishGuard = false;
+        foDbgSeekTarget = -1; // v1.8.5：切歌作废待采的落点样本，防采到新曲位置
         foTrackId = null;
         foStart = null;
         foEnd = null;
@@ -564,6 +643,7 @@ public class PlayerService extends Service {
     private void resyncFollowAfterSeek(long pos) {
         if (!followEnabled || current == null) return;
         if (!ensureFollowTimeline()) return;
+        foDbgSeekTarget = -1; // v1.8.5：人工 seek 作废待采的落点样本（落点已被人工改写）
         int idx = followIndexForPosition(pos);
         followGapPaused = false;
         if (idx < 0) {

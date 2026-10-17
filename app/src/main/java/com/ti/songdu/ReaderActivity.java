@@ -73,6 +73,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     /** v1.7 跟读字数小钮（跟读开时显示，如「15字」）与底部说明行 */
     private TextView btnRFollowChars;
     private TextView readerFollowHint;
+    /** v1.8.5 跟读调试读数行（跟读开时显示）与上次推送文案（去重） */
+    private TextView readerFollowDebug;
+    private String lastFollowDebug = null;
     private TextView readerPageInfo;
     private Boolean lastFollowOn = null;
     private Integer lastChunkChars = null;
@@ -139,6 +142,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRFollow = findViewById(R.id.btnRFollow);
         btnRFollowChars = findViewById(R.id.btnRFollowChars);
         readerFollowHint = findViewById(R.id.readerFollowHint);
+        readerFollowDebug = findViewById(R.id.readerFollowDebug);
         readerPageInfo = findViewById(R.id.readerPageInfo);
         btnRScript = findViewById(R.id.btnRScript);
         btnRPinyin = findViewById(R.id.btnRPinyin);
@@ -428,6 +432,21 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             followModePushed = fOn;
             web.evaluateJavascript("setFollowMode(" + fOn + ")", null);
             if (fOn) curClause = -1;
+        }
+        // v1.8.5 跟读调试读数：跟读开且服务在场时附一行实测读数（过冲/落点），
+        // 随本轮询（150ms）刷新、文案变化才 setText；关时整行隐藏
+        if (readerFollowDebug != null) {
+            if (fOn && svc != null) {
+                String dbg = svc.followDebugText();
+                readerFollowDebug.setVisibility(View.VISIBLE);
+                if (!dbg.equals(lastFollowDebug)) {
+                    lastFollowDebug = dbg;
+                    readerFollowDebug.setText(dbg);
+                }
+            } else {
+                readerFollowDebug.setVisibility(View.GONE);
+                lastFollowDebug = null;
+            }
         }
         // gap 阶段标记：当前句保持高亮，只换一层底色/线型提示「轮到你复诵」
         boolean gapOn = mine && svc.followEnabled
