@@ -24,6 +24,12 @@ body.vert .s{scroll-margin-top:0;scroll-margin-right:14px;}
 .s.cur{background:rgba(158,59,43,.14);border-bottom-color:#9E3B2B;}
 /* 跟读 gap 阶段（v1.4.3）：当前句保持高亮但换金黄底＋虚线下划线，提示「轮到你复诵」 */
 .s.cur.gap{background:rgba(169,124,44,.22);border-bottom-style:dashed;}
+/* 小句级高亮（v1.8.2）：普通播放时当前句按 breaks 拆成小句 span，只高亮所在小句；
+   整句的 .cur 样式在拆分后让位（.split 时句底色/下划线透明），由 .cl.cur 承接同一套朱砂样式 */
+.s.split{background:transparent;border-bottom-color:transparent;}
+.s.split .cl.cur{background:rgba(158,59,43,.14);border-bottom:2px solid #9E3B2B;padding-bottom:1px;}
+body.vert .s.split{border-left-color:transparent;}
+body.vert .s.split .cl.cur{background:rgba(158,59,43,.12);border-left:2px solid #9E3B2B;}
 .s.na{color:#7d766b;}
 #fin{text-align:center;padding:2.4em 0 3.2em;}
 .finline{color:#8A8174;font-size:.8em;margin-bottom:1.1em;}
@@ -164,6 +170,7 @@ function flipPage(dir, manual){
 }
 function markCur(i, scroll){
   if (cur >= 0){
+    if (splitEl && splitIdx === cur) unsplit();
     var p = document.getElementById('si' + cur);
     if (p){ p.classList.remove('cur'); p.classList.remove('gap'); }
   }
@@ -173,11 +180,94 @@ function markCur(i, scroll){
     if (el){
       el.classList.add('cur');
       if (gapOn) el.classList.add('gap');
+      splitSentence(el, flat[i]);
       if (scroll){ if (isVert()) vertFollow(el); else pageToSentence(el); }
     }
   }
 }
 function setCur(i, scroll){ markCur(i, scroll); }
+/* ===== 小句级高亮（v1.8.2）=====
+   普通播放时把当前句按 breaks 拆成小句 span（切分与逗号级 SRT 完全同源：
+   句内按 breaks.p 断开、标点后收尾符归前一小句、句末小句到 endMs），
+   只给播放位置所在小句加 .cur（朱砂）。当前句的判定/跟随/seek 仍以整句为
+   单位（markCur/pageToSentence/vertFollow 不变）；只在当前句变化时重建子
+   span、小句变化时只挪 class。跟读模式不拆小句（setFollowMode 还原整句，
+   保持既有整句高亮＋gap 呈现）。无 breaks 的句子整句即一个小句、不拆。 */
+var CLOSERS = new Set(Array.from('」』）》”’】〕〉'));
+var splitEl = null, splitOrigHTML = null, splitIdx = -1;
+var wantClause = 0, curClause = -1;
+var followMode = false;
+function clauseRanges(s){
+  var text = stateTrad ? s.textT : s.textS;
+  if (!s.breaks || !s.breaks.length) return null;
+  var cps = Array.from(text);
+  var u16 = new Array(cps.length), acc = 0;
+  for (var j = 0; j < cps.length; j++){ u16[j] = acc; acc += cps[j].length; }
+  var ends = [];
+  for (var bi = 0; bi < s.breaks.length; bi++){
+    var j = u16.indexOf(s.breaks[bi].p);
+    if (j < 0) continue;
+    var e = j;
+    while (e + 1 < cps.length && CLOSERS.has(cps[e + 1])) e++;
+    if (e >= cps.length - 1) continue;
+    ends.push(e);
+  }
+  if (!ends.length) return null;
+  var ranges = [], prev = 0;
+  for (var k = 0; k < ends.length; k++){ ranges.push([prev, ends[k] + 1]); prev = ends[k] + 1; }
+  if (prev < cps.length) ranges.push([prev, cps.length]);
+  return ranges.length > 1 ? ranges : null;
+}
+function clauseHTML(s, ranges){
+  var text = stateTrad ? s.textT : s.textS;
+  var cps = Array.from(text);
+  var pi = 0, out = '<span class="cl" data-cl="0">', ci = 0;
+  for (var j = 0; j < cps.length; j++){
+    if (ci < ranges.length - 1 && j === ranges[ci][1]){
+      ci++;
+      out += '</span><span class="cl" data-cl="' + ci + '">';
+    }
+    var c = cps[j];
+    if (isCJK(c)){
+      var py = (s.pinyin && pi < s.pinyin.length) ? s.pinyin[pi] : '';
+      pi++;
+      out += py ? '<ruby>' + c + '<rt>' + esc(py) + '</rt></ruby>' : c;
+    } else out += esc(c);
+  }
+  return out + '</span>';
+}
+function applyClause(){
+  if (!splitEl){ curClause = -1; return; }
+  var cls = splitEl.querySelectorAll('.cl');
+  if (curClause >= 0 && curClause < cls.length) cls[curClause].classList.remove('cur');
+  curClause = (wantClause >= 0 && wantClause < cls.length) ? wantClause : -1;
+  if (curClause >= 0) cls[curClause].classList.add('cur');
+}
+function setClause(k){ wantClause = k; if (splitEl) applyClause(); }
+function unsplit(){
+  if (!splitEl) return;
+  splitEl.innerHTML = splitOrigHTML;
+  splitEl.classList.remove('split');
+  splitEl = null; splitOrigHTML = null; splitIdx = -1; curClause = -1;
+}
+function splitSentence(el, s){
+  if (followMode || !s) return;
+  var ranges = clauseRanges(s);
+  if (!ranges) return;
+  splitEl = el; splitOrigHTML = el.innerHTML; splitIdx = s._i;
+  el.innerHTML = clauseHTML(s, ranges);
+  el.classList.add('split');
+  curClause = -1;
+  applyClause();
+}
+function setFollowMode(on){
+  followMode = !!on;
+  if (followMode){ unsplit(); return; }
+  if (cur >= 0 && splitIdx !== cur){
+    var el = document.getElementById('si' + cur);
+    if (el) splitSentence(el, flat[cur]);
+  }
+}
 /* 跟读 gap 标记（v1.4.3）：只改当前句的呈现，不动高亮位置与翻页跟随 */
 function setGap(on){
   gapOn = !!on;

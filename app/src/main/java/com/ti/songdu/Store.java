@@ -119,6 +119,8 @@ public class Store {
                             o.optString("kind", Track.KIND_CONTENT));
                     // v1.5 迁移：旧文件无 group 字段 → null（不分组）
                     if (o.has("group") && !o.isNull("group")) t.group = o.getString("group");
+                    // v1.8.2 迁移：旧文件无 content 字段 → null（无导入字幕内容包）
+                    if (o.has("content") && !o.isNull("content")) t.contentId = o.getString("content");
                     tracks.add(t);
                 }
             }
@@ -190,6 +192,7 @@ public class Store {
                 o.put("base", t.baseTotal);
                 o.put("kind", t.kind);
                 if (t.group != null) o.put("group", t.group);
+                if (t.contentId != null) o.put("content", t.contentId);
                 o.put("dur", t.durationMs);
                 o.put("pos", t.positionMs);
                 arr.put(o);

@@ -85,6 +85,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private int curSentence = -1;
+    /** v1.8.2 小句高亮：当前句内小句序号（与 JS wantClause 同步）与跟读模式推送去重 */
+    private int curClause = -1;
+    private Boolean followModePushed = null;
     private boolean followPaused = false;
     private long followResumeAt = 0;
     private boolean finishDialogShowing = false;
@@ -419,6 +422,13 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             lastChunkChars = cc;
             refreshFollowButton(fOn);
         }
+        // v1.8.2：跟读开关态推给 JS——跟读时不拆小句（整句高亮＋gap 不变），
+        // 普通播放时当前句才按 breaks 拆小句高亮
+        if (followModePushed == null || followModePushed != fOn) {
+            followModePushed = fOn;
+            web.evaluateJavascript("setFollowMode(" + fOn + ")", null);
+            if (fOn) curClause = -1;
+        }
         // gap 阶段标记：当前句保持高亮，只换一层底色/线型提示「轮到你复诵」
         boolean gapOn = mine && svc.followEnabled
                 && svc.followPhase == PlayerService.FOLLOW_GAP;
@@ -431,13 +441,37 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         long pos = svc.currentPosition();
         int ti = findTimedIndex(pos);
         int flatIdx = ti >= 0 ? tFlat[ti] : -1;
+        boolean sentChanged = false;
         if (flatIdx != curSentence) {
             curSentence = flatIdx;
+            sentChanged = true;
             boolean scroll = !followPaused;
             web.evaluateJavascript("setCur(" + flatIdx + "," + scroll + ")", null);
         } else if (followPaused && System.currentTimeMillis() >= followResumeAt) {
             resumeFollow(true);
         }
+        // v1.8.2 小句高亮：仅普通播放——按 breaks（缩放后时间轴，与 tStart 同口径）
+        // 算当前小句序号，只在（句, 小句）变化时推给 JS；JS 侧负责拆 span 与挪 class。
+        // 当前句判定/跟随/seek 仍以整句为单位（上面 setCur 的逻辑不动）。
+        if (!fOn && flatIdx >= 0) {
+            int cl = clauseIndexAt(flatIdx, pos);
+            if (sentChanged || cl != curClause) {
+                curClause = cl;
+                web.evaluateJavascript("setClause(" + cl + ")", null);
+            }
+        }
+    }
+
+    /** 当前位置在该句内的小句序号：breakMs 缩放后 <= pos 的个数；无 breaks 时 0（整句一个小句） */
+    private int clauseIndexAt(int flatIdx, long pos) {
+        ContentRepo.Sentence s = book.flat.get(flatIdx);
+        if (s.breakMs == null) return 0;
+        int cl = 0;
+        for (long t : s.breakMs) {
+            if (Math.round(t * scale) <= pos) cl++;
+            else break;
+        }
+        return cl;
     }
 
     /** 二分查找：最后一个 startMs <= pos 的有时间句子（句间停顿/章题时间也归前一句高亮） */

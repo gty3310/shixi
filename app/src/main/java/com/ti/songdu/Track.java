@@ -20,6 +20,10 @@ public class Track {
     /** v1.5 分组标记（如「论语」）：同组曲目在首页收拢为可折叠组；null＝不分组。
      *  老 tracks.json 无此字段，读取时为 null，行为与旧版一致 */
     public String group;
+    /** v1.8.2 用户导入字幕生成的内容包 id（"user-<曲目id>"，包体存内部存储
+     *  usercontent/ 目录，结构与 assets/content 相同）；null＝无自带文字。
+     *  老 tracks.json 无此字段，读取时为 null，行为与旧版一致 */
+    public String contentId;
     /** 软件记录之外、此前已读的遍数（偏移量）：总计 = 本软件按天记录合计 + baseTotal */
     public int baseTotal;
 

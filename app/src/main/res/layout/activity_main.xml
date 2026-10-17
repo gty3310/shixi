@@ -25,26 +25,38 @@
             android:textStyle="bold" />
 
         <Button
-            android:id="@+id/btnCopy"
+            android:id="@+id/btnAdd"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginRight="8dp"
+            android:background="@drawable/pill_ink"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp"
+            android:text="添加书籍"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnHelp"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
             android:layout_marginRight="8dp"
             android:background="@drawable/pill_outline"
             android:paddingLeft="14dp"
             android:paddingRight="14dp"
-            android:text="复制群消息"
+            android:text="帮助"
             android:textColor="@color/ink"
             android:textSize="14sp" />
 
         <Button
-            android:id="@+id/btnAdd"
+            android:id="@+id/btnCopy"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
-            android:background="@drawable/pill_ink"
-            android:paddingLeft="16dp"
-            android:paddingRight="16dp"
-            android:text="+ 添加音频"
-            android:textColor="#FFFFFF"
+            android:background="@drawable/pill_outline"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:text="复制群消息"
+            android:textColor="@color/ink"
             android:textSize="14sp" />
     </LinearLayout>
 

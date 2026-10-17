@@ -101,6 +101,8 @@ public class ContentRepo {
     /** 曲目 → 内容包 id；无配套原文时返回 null（卡上不显示阅读钮） */
     public static String bookIdFor(Track t) {
         if (t == null) return null;
+        // v1.8.2：用户导入字幕生成的自有内容包优先于一切名称匹配
+        if (t.contentId != null) return t.contentId;
         if ("preset-daxue-full".equals(t.id)) return "daxue";
         if ("preset-zhongyong-full".equals(t.id)) return "zhongyong";
         if (t.id != null && t.id.startsWith("preset-lunyu-")) return "lunyu";
@@ -162,17 +164,65 @@ public class ContentRepo {
         return bookIdFor(t) != null;
     }
 
+    /** v1.8.2 用户导入内容包存放目录（内部存储 files/usercontent/<bookId>.json） */
+    public static java.io.File userContentFile(Context ctx, String bookId) {
+        java.io.File dir = new java.io.File(ctx.getFilesDir(), "usercontent");
+        return new java.io.File(dir, bookId + ".json");
+    }
+
+    /** v1.8.2 保存用户导入内容包（结构与 assets/content 相同）；成功返回 true */
+    public static boolean saveUserBook(Context ctx, String bookId, String json) {
+        try {
+            java.io.File f = userContentFile(ctx, bookId);
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            java.io.FileOutputStream out = new java.io.FileOutputStream(f);
+            out.write(json.getBytes(StandardCharsets.UTF_8));
+            out.close();
+            synchronized (ContentRepo.class) {
+                CACHE.remove(bookId);
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** v1.8.2 删除用户导入内容包（删曲目时一并清理，不留孤儿文件） */
+    public static void deleteUserBook(Context ctx, String bookId) {
+        try {
+            java.io.File f = userContentFile(ctx, bookId);
+            if (f.exists()) f.delete();
+        } catch (Exception ignored) {
+        }
+        synchronized (ContentRepo.class) {
+            CACHE.remove(bookId);
+        }
+    }
+
     public static synchronized Book load(Context ctx, String bookId) {
         if (bookId == null) return null;
         Book cached = CACHE.get(bookId);
         if (cached != null) return cached;
         try {
-            InputStream in = ctx.getAssets().open("content/" + bookId + ".json");
-            byte[] buf = new byte[in.available()];
-            int n = in.read(buf);
-            in.close();
-            if (n <= 0) return null;
-            String raw = new String(buf, 0, n, StandardCharsets.UTF_8);
+            String raw;
+            try {
+                InputStream in = ctx.getAssets().open("content/" + bookId + ".json");
+                byte[] buf = new byte[in.available()];
+                int n = in.read(buf);
+                in.close();
+                if (n <= 0) return null;
+                raw = new String(buf, 0, n, StandardCharsets.UTF_8);
+            } catch (Exception assetMiss) {
+                // v1.8.2：assets 没有时回退到用户导入内容包（内部存储）
+                java.io.File f = userContentFile(ctx, bookId);
+                if (!f.exists()) return null;
+                java.io.FileInputStream in = new java.io.FileInputStream(f);
+                byte[] buf = new byte[in.available()];
+                int n = in.read(buf);
+                in.close();
+                if (n <= 0) return null;
+                raw = new String(buf, 0, n, StandardCharsets.UTF_8);
+            }
             JSONObject o = new JSONObject(raw);
             if ("lunyu".equals(bookId)) lunyuDoc = o;
             Book b = new Book();

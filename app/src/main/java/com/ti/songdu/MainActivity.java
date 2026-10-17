@@ -81,6 +81,15 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
     // 文件选择用经典 startActivityForResult（零第三方依赖）
     private static final int REQ_PICK = 1007;
+    private static final int REQ_PICK_SRT_S = 1008;
+    private static final int REQ_PICK_SRT_T = 1009;
+
+    // v1.8.2「添加书籍」弹窗的待选文件（选完点「添加」才真正导入）
+    private Uri pendingAudioUri, pendingSrtSUri, pendingSrtTUri;
+    private String pendingAudioName, pendingSrtSName, pendingSrtTName;
+    private TextView lblAudioFile, lblSrtSFile, lblSrtTFile;
+    private Button btnConfirmAdd;
+    private Dialog addBookDialog;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -115,7 +124,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 today.getYear(), today.getMonthValue(), today.getDayOfMonth(),
                 WEEKDAYS[today.getDayOfWeek().getValue() - 1]));
 
-        findViewById(R.id.btnAdd).setOnClickListener(v -> openPicker());
+        findViewById(R.id.btnAdd).setOnClickListener(v -> showAddBookDialog());
+        findViewById(R.id.btnHelp).setOnClickListener(v -> startActivity(
+                new Intent(this, HelpActivity.class)));
         findViewById(R.id.btnCopy).setOnClickListener(v -> showCopyDialog());
 
         buildSpeedChips();
@@ -207,25 +218,62 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("audio/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"audio/*", "audio/mpeg"});
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         startActivityForResult(i, REQ_PICK);
     }
 
+    private void openSrtPicker(int requestCode) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES,
+                new String[]{"application/x-subrip", "text/plain", "text/x-subrip"});
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(i, requestCode);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_PICK && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            addTrackFromUri(data.getData());
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        if (requestCode == REQ_PICK) {
+            takeReadPermission(uri);
+            pendingAudioUri = uri;
+            pendingAudioName = queryDisplayName(uri);
+            updateAddDialog();
+        } else if (requestCode == REQ_PICK_SRT_S || requestCode == REQ_PICK_SRT_T) {
+            String name = queryDisplayName(uri);
+            if (name == null || !name.toLowerCase(java.util.Locale.ROOT).endsWith(".srt")) {
+                Toast.makeText(this, "这个文件不是字幕文件，请选以 .srt 结尾的字幕文件",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            takeReadPermission(uri);
+            if (requestCode == REQ_PICK_SRT_S) {
+                pendingSrtSUri = uri;
+                pendingSrtSName = name;
+            } else {
+                pendingSrtTUri = uri;
+                pendingSrtTName = name;
+            }
+            updateAddDialog();
         }
     }
 
-    private void addTrackFromUri(Uri uri) {
+    private void takeReadPermission(Uri uri) {
         try {
             getContentResolver().takePersistableUriPermission(
                     uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
         } catch (Exception ignored) {
         }
+    }
+
+    private Track addTrackFromUri(Uri uri) {
+        takeReadPermission(uri);
         String fileName = queryDisplayName(uri);
         String title = deriveTitle(fileName, uri);
         long dur = queryDuration(uri);
@@ -236,6 +284,253 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         store.tracks.add(t);
         store.saveTracks();
         refreshAll();
+        return t;
+    }
+
+    // ---------- v1.8.2 添加书籍弹窗 ----------
+    /**
+     * 顶部「添加书籍」弹窗：三个选文件按钮（音频／简体字幕／繁体字幕）纵向排列，
+     * 每行右侧显示已选文件名（未选显示「未选择」）；只有音频也能加（与旧行为一致），
+     * 带字幕则把每个字幕 cue 建成一句、生成用户内容包，这本书就有文字可读。
+     */
+    private void showAddBookDialog() {
+        pendingAudioUri = pendingSrtSUri = pendingSrtTUri = null;
+        pendingAudioName = pendingSrtSName = pendingSrtTName = null;
+
+        final Dialog dialog = new Dialog(this);
+        addBookDialog = dialog;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(18);
+        root.setPadding(pad, pad, pad, dp(14));
+
+        TextView title = new TextView(this);
+        title.setText("添加书籍");
+        title.setTextSize(19);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setTextColor(getColor(R.color.ink));
+        root.addView(title);
+
+        lblAudioFile = addPickRow(root, "上传音频", v -> openPicker());
+        lblSrtSFile = addPickRow(root, "上传简体字幕", v -> openSrtPicker(REQ_PICK_SRT_S));
+        lblSrtTFile = addPickRow(root, "上传繁体字幕", v -> openSrtPicker(REQ_PICK_SRT_T));
+
+        TextView note = new TextView(this);
+        note.setText("只有音频也能加，可以先听；字幕齐了，文字才能跟着声音走。");
+        note.setTextSize(12);
+        note.setTextColor(getColor(R.color.muted));
+        LinearLayout.LayoutParams noteLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        noteLp.topMargin = dp(12);
+        note.setLayoutParams(noteLp);
+        root.addView(note);
+
+        Button btnHelp = pillButton("查看帮助", false);
+        LinearLayout.LayoutParams helpLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(42));
+        helpLp.topMargin = dp(12);
+        btnHelp.setLayoutParams(helpLp);
+        btnHelp.setOnClickListener(v -> startActivity(
+                new Intent(this, HelpActivity.class)
+                        .putExtra(HelpActivity.EXTRA_ANCHOR, "add")));
+        root.addView(btnHelp);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = dp(16);
+        row.setLayoutParams(rowLp);
+        View spacer = new View(this);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1));
+        row.addView(spacer);
+        Button btnCancel = pillButton("取消", false);
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+        row.addView(btnCancel);
+        btnConfirmAdd = pillButton("添加", true);
+        LinearLayout.LayoutParams addLp = (LinearLayout.LayoutParams) btnConfirmAdd.getLayoutParams();
+        addLp.leftMargin = dp(10);
+        btnConfirmAdd.setLayoutParams(addLp);
+        btnConfirmAdd.setOnClickListener(v -> confirmAddBook());
+        row.addView(btnConfirmAdd);
+        root.addView(row);
+
+        dialog.setContentView(root);
+        dialog.setOnDismissListener(d -> {
+            if (addBookDialog == d) addBookDialog = null;
+        });
+        dialog.show();
+        Window win = dialog.getWindow();
+        if (win != null) {
+            win.setBackgroundDrawableResource(R.drawable.dialog_bg);
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            win.setLayout((int) (dm.widthPixels * 0.94), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        updateAddDialog();
+    }
+
+    /** 弹窗里的一行：左侧选文件按钮＋右侧文件名（未选显示「未选择」），返回文件名标签 */
+    private TextView addPickRow(LinearLayout root, String btnText, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowLp.topMargin = dp(12);
+        row.setLayoutParams(rowLp);
+        Button b = pillButton(btnText, false);
+        b.setOnClickListener(click);
+        row.addView(b);
+        TextView name = new TextView(this);
+        name.setText("未选择");
+        name.setTextSize(13);
+        name.setTextColor(getColor(R.color.muted));
+        name.setSingleLine(true);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        nameLp.leftMargin = dp(10);
+        name.setLayoutParams(nameLp);
+        row.addView(name);
+        root.addView(row);
+        return name;
+    }
+
+    private void updateAddDialog() {
+        if (lblAudioFile != null) {
+            lblAudioFile.setText(pendingAudioName != null ? pendingAudioName : "未选择");
+            lblSrtSFile.setText(pendingSrtSName != null ? pendingSrtSName : "未选择");
+            lblSrtTFile.setText(pendingSrtTName != null ? pendingSrtTName : "未选择");
+        }
+        if (btnConfirmAdd != null) {
+            boolean ok = pendingAudioUri != null;
+            btnConfirmAdd.setEnabled(ok);
+            btnConfirmAdd.setAlpha(ok ? 1.0f : 0.4f);
+        }
+    }
+
+    /** 点「添加」：无字幕＝旧行为；有字幕＝先解析，读不出来就提示且不留半成品 */
+    private void confirmAddBook() {
+        if (pendingAudioUri == null) return;
+        java.util.List<SrtParser.Cue> cuesS = null, cuesT = null;
+        if (pendingSrtSUri != null) {
+            cuesS = SrtParser.parse(readTextUri(pendingSrtSUri));
+            if (cuesS.isEmpty()) {
+                Toast.makeText(this, "这个字幕文件没读出来", Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        if (pendingSrtTUri != null) {
+            cuesT = SrtParser.parse(readTextUri(pendingSrtTUri));
+            if (cuesT.isEmpty()) {
+                Toast.makeText(this, "这个字幕文件没读出来", Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        Track t = addTrackFromUri(pendingAudioUri);
+        if (cuesS != null || cuesT != null) {
+            String bookId = "user-" + t.id;
+            try {
+                String json = buildUserBookJson(bookId, t, cuesS, cuesT);
+                if (ContentRepo.saveUserBook(this, bookId, json)) {
+                    t.contentId = bookId;
+                    store.saveTracks();
+                    refreshAll();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (addBookDialog != null) addBookDialog.dismiss();
+    }
+
+    private String readTextUri(Uri uri) {
+        try {
+            java.io.InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            in.close();
+            byte[] bytes = bos.toByteArray();
+            String utf8 = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+            int bad = utf8.length() - utf8.replace("�", "").length();
+            if (bad > 0) {
+                try {
+                    String gbk = new String(bytes, "GBK");
+                    int bad2 = gbk.length() - gbk.replace("�", "").length();
+                    if (bad2 < bad) return gbk;
+                } catch (Exception ignored) {
+                }
+            }
+            return utf8;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 把字幕 cue 建成内容包：每个 cue 即一句（无 breaks、无拼音）；简繁按开始时间
+     * 就近配对（差 2 秒内），只给一份字幕时简繁两面都显示这份的文本（App 无繁简
+     * 转换引擎，不做自动转换）。
+     */
+    private String buildUserBookJson(String bookId, Track t,
+                                     java.util.List<SrtParser.Cue> cuesS,
+                                     java.util.List<SrtParser.Cue> cuesT) throws Exception {
+        java.util.List<SrtParser.Cue> primary = cuesS != null ? cuesS : cuesT;
+        org.json.JSONArray ss = new org.json.JSONArray();
+        for (int i = 0; i < primary.size(); i++) {
+            SrtParser.Cue cue = primary.get(i);
+            String textS, textT;
+            if (cuesS != null && cuesT != null) {
+                if (primary == cuesS) {
+                    textS = cue.text;
+                    SrtParser.Cue m = nearestCue(cuesT, cue.startMs);
+                    textT = m != null ? m.text : cue.text;
+                } else {
+                    textT = cue.text;
+                    SrtParser.Cue m = nearestCue(cuesS, cue.startMs);
+                    textS = m != null ? m.text : cue.text;
+                }
+            } else {
+                textS = cue.text;
+                textT = cue.text;
+            }
+            JSONObject so = new JSONObject();
+            so.put("id", "u" + (i + 1));
+            so.put("startMs", cue.startMs);
+            so.put("endMs", cue.endMs);
+            so.put("textS", textS);
+            so.put("textT", textT);
+            so.put("pinyin", new org.json.JSONArray());
+            ss.put(so);
+        }
+        JSONObject ch = new JSONObject();
+        ch.put("id", "c1");
+        ch.put("title", t.title);
+        ch.put("sentences", ss);
+        org.json.JSONArray chs = new org.json.JSONArray();
+        chs.put(ch);
+        JSONObject doc = new JSONObject();
+        doc.put("bookId", bookId);
+        doc.put("title", t.title);
+        doc.put("audioDurationMs", t.durationMs);
+        doc.put("chapters", chs);
+        return doc.toString();
+    }
+
+    private SrtParser.Cue nearestCue(java.util.List<SrtParser.Cue> cues, long startMs) {
+        SrtParser.Cue best = null;
+        long bestDiff = Long.MAX_VALUE;
+        for (SrtParser.Cue c : cues) {
+            long d = Math.abs(c.startMs - startMs);
+            if (d < bestDiff) {
+                bestDiff = d;
+                best = c;
+            }
+        }
+        return bestDiff <= 2000 ? best : null;
     }
 
     private String queryDisplayName(Uri uri) {
@@ -475,6 +770,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                     if (svc != null && svc.current != null && svc.current.id.equals(t.id)) {
                         sendService(PlayerService.ACTION_STOP, null);
                     }
+                    // v1.8.2：导入字幕生成的自有内容包一并删除，不留孤儿文件
+                    if (t.contentId != null) ContentRepo.deleteUserBook(this, t.contentId);
                     store.tracks.remove(t);
                     store.saveTracks();
                     refreshAll();
