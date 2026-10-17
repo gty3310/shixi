@@ -29,7 +29,8 @@ import java.util.List;
  *  settings.json—— {"speed":1.0, "copyDate":true, "copyPeriods":["today","week","month","total"],
  *                   "presetsDone":true（v1.3 预置音频已释放标记，只释放一次）}
  *                   v1.5 起多 group 字段（曲目分组，如论语二十篇同属一组）与
- *                   settings 的 presetsInstalled 数组（已安装过的预置 id 集合，增量补装用）
+ *                   settings 的 presetsInstalled 数组（已安装过的预置 id 集合，增量补装用）；
+ *                   v1.8.3 起多 presetsAudioVersion（预置音频已随应用刷新到的 versionCode）
  */
 public class Store {
     private final Context ctx;
@@ -60,6 +61,12 @@ public class Store {
      *  某 id 一旦装过就永不再装，用户移除后不会被加回；老用户从 v1.3/v1.4 升级时
      *  集合为空但 presetsDone=true，则把大学/中庸两个 id 视为已装、只补论语二十篇 */
     public final java.util.List<String> presetsInstalled = new ArrayList<>();
+    /** v1.8.3：预置音频已随应用版本刷新到的 versionCode（持久化在 settings.json 的
+     *  presetsAudioVersion，旧文件无此键时默认 0）。覆盖安装只换 APK 本体、内部存储原样
+     *  保留，旧版释放到 files/presets/ 的音频不会被新 APK 的资源自动覆盖，故启动时若
+     *  此值小于当前 versionCode，要把已有预置曲目的音频强制重新释放一遍
+     *  （见 refreshPresetAudioIfUpgraded） */
+    public int presetsAudioVersion = 0;
 
     public Store(Context ctx) {
         this.ctx = ctx.getApplicationContext();
@@ -164,6 +171,8 @@ public class Store {
                     presetsInstalled.add("preset-daxue-full");
                     presetsInstalled.add("preset-zhongyong-full");
                 }
+                // v1.8.3 迁移：旧 settings 无 presetsAudioVersion → 默认 0，下次启动必然触发一次刷新
+                presetsAudioVersion = o.optInt("presetsAudioVersion", 0);
                 JSONArray p = o.optJSONArray("copyPeriods");
                 if (p != null) {
                     for (int i = 0; i < p.length(); i++) copyPeriods.add(p.getString(i));
@@ -219,6 +228,7 @@ public class Store {
             JSONArray piArr = new JSONArray();
             for (String id : presetsInstalled) piArr.put(id);
             o.put("presetsInstalled", piArr);
+            o.put("presetsAudioVersion", presetsAudioVersion);
             JSONArray p = new JSONArray();
             for (String k : PERIOD_KEYS) if (copyPeriods.contains(k)) p.put(k);
             o.put("copyPeriods", p);
@@ -268,9 +278,13 @@ public class Store {
      *    列表里一个预置都没有时插到最前；块内顺序即 PRESETS 顺序（大学、中庸、论语一至二十篇）；
      *  - 音频文件释放到内部存储 files/presets/，已存在且非空则不重复释放；
      *  - 额外再按稳定 id 查一遍，列表中已存在同 id 时只登记已装、不重复插入（双保险）。
+     *  - v1.8.3：进入补装前先做一次「随版本刷新」（refreshPresetAudioIfUpgraded），
+     *    把已有预置曲目的音频按当前 APK 资源强制重新释放，修覆盖安装后仍播旧音频的 bug；
+     *    刷新不新建条目、不改变本方法的补装集合与顺序。
      * 预置曲目 kind=file、来源记「内置音频」，与普通曲目完全同权。
      */
     public synchronized void installPresetsIfNeeded() {
+        refreshPresetAudioIfUpgraded();
         java.util.List<Object[]> todo = new ArrayList<>();
         for (Object[] spec : PRESETS) {
             if (!presetsInstalled.contains((String) spec[0])) todo.add(spec);
@@ -318,6 +332,77 @@ public class Store {
         presetsDone = true; // 旧标记继续维护（已无实际作用，仅保持 settings 兼容）
         saveSettings();
         if (changed) saveTracks();
+    }
+
+    /** 当前应用的 versionCode；取不到（异常）时返回 0，刷新逻辑据此不触发 */
+    private int appVersionCode() {
+        try {
+            android.content.pm.PackageInfo pi =
+                    ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
+            if (android.os.Build.VERSION.SDK_INT >= 28) return (int) pi.getLongVersionCode();
+            return pi.versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * v1.8.3 预置音频随版本刷新（installPresetsIfNeeded 的前置步骤）：
+     * 覆盖安装只替换 APK 本体，files/presets/ 里旧版释放的音频原样保留，而补装逻辑
+     * 按 presetsInstalled「装过永不再装」——于是新 APK 里的新音频永远没机会覆盖旧文件
+     * （v1.8.2 实测踩到：《中庸》包内音频已切除章节名念白，装机后播的仍是旧音频，
+     * 且内容包是新时间轴，声画越走越岔）。规则：
+     *  - 仅当 presetsAudioVersion < 当前 versionCode 时才跑，跑过后同版本再启动直接跳过；
+     *  - 只刷新「已有曲目条目」的预置 id：逐个用当前 res/raw 强制覆盖重释放对应文件，
+     *    重算时长、有变化才回写 Track.durationMs 并保存。没有条目的 id 一律跳过——
+     *    用户已删除的预置曲目绝不复活、绝不新建文件；未装的 id 仍由后面的增量补装处理；
+     *  - 用户自加曲目与导入书（usercontent）不在 PRESETS 里，天然不碰；
+     *  - 首次安装时没有任何预置条目，刷新集合为空，只记版本号、无重复释放，
+     *    随后原有增量补装照常走一遍；
+     *  - 任一条目释放失败只跳过该条且不推进 presetsAudioVersion，下次启动整体重试，
+     *    避免失败条目永远失去刷新机会；本方法自身不抛异常，不影响启动。
+     */
+    private void refreshPresetAudioIfUpgraded() {
+        int vc = appVersionCode();
+        if (vc <= 0 || presetsAudioVersion >= vc) return;
+        File dir = new File(ctx.getFilesDir(), "presets");
+        boolean anyFailed = false;
+        boolean tracksChanged = false;
+        for (Object[] spec : PRESETS) {
+            String id = (String) spec[0];
+            Track t = findTrack(id);
+            if (t == null) continue; // 无条目：已删除或未装，跳过（不复活、不代劳补装）
+            int rawRes = (Integer) spec[2];
+            String fileName = (String) spec[3];
+            if (!dir.exists()) dir.mkdirs();
+            File dest = new File(dir, fileName);
+            boolean ok = false;
+            try {
+                InputStream in = ctx.getResources().openRawResource(rawRes);
+                FileOutputStream out = new FileOutputStream(dest);
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                out.close();
+                in.close();
+                ok = dest.exists() && dest.length() > 0;
+            } catch (Exception ignored) {
+            }
+            if (!ok) {
+                anyFailed = true;
+                continue;
+            }
+            long dur = fileDurationMs(dest.getAbsolutePath());
+            if (dur > 0 && dur != t.durationMs) {
+                t.durationMs = dur;
+                tracksChanged = true;
+            }
+        }
+        if (tracksChanged) saveTracks();
+        if (!anyFailed) {
+            presetsAudioVersion = vc;
+            saveSettings();
+        }
     }
 
     /** 本地文件的时长（预置音频释放后读取；content:// 曲目的时长读取在 MainActivity 里） */
