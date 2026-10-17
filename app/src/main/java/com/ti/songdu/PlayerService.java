@@ -58,6 +58,8 @@ import java.time.LocalDate;
  *  改为：本段末句与下一段首句同小节 → 实际停止点＝下一段 startMs（完全重合）；
  *  跨小节、最后一段 → 仍停在本段 endMs，小节间停顿保持原样。内容包数据不改，
  *  普通连续播放不走此逻辑。gap 仍按 foStop 口径的实际播过时长推算。
+ *  v1.8.4：每段停止点（最后一段除外）再提前 150ms 触发，补偿 50ms 轮询＋位置
+ *  上报延迟的过冲（原先段末会吃掉下一段开头一两个字、恢复时又重念一遍）。
  */
 public class PlayerService extends Service {
     public static final String ACTION_PLAY_TRACK = "com.ti.songdu.PLAY_TRACK";
@@ -123,6 +125,10 @@ public class PlayerService extends Service {
     private long followGapEndsAt = 0;
     /** v1.6.1：gap 时长倍数——停顿留本句真实时长的 1.5 倍（跟读者复诵比录音慢） */
     private static final double FOLLOW_GAP_FACTOR = 1.5;
+    /** v1.8.4：跟读停止点提前量（用户定）——状态机 50ms 轮询＋getCurrentPosition 上报
+     *  延迟会让暂停冲过停止点、吃掉下一段开头一两个字；每段 foStop（最后一段除外）
+     *  一律提前 150ms 触发补偿过冲。停止点本就落在静音中点附近，提前 150ms 仍在静音内 */
+    private static final long FOLLOW_STOP_EARLY_MS = 150;
     /** 当前句这一段是从哪个媒体位置开始播的；gap＝(句末−段始)/倍速，即实际听到的时长 */
     private long followSegFrom = 0;
     /** watcher 已接管最后一句的完成处理时置真，防 onCompletion 再走旧路径重复计数 */
@@ -134,7 +140,8 @@ public class PlayerService extends Service {
     private long[] foEnd = null;
     /** v1.8.1 每段的实际停止点：与下一段同小节时＝下一段 startMs（切点与下一句起点
      *  完全重合，句间音频一帧不跳）；跨小节或最后一段时＝本段自身 endMs（小节间停顿
-     *  保持原样）。与 foStart/foEnd 同建同废，状态机判定段末与算 gap 都用它 */
+     *  保持原样）。与 foStart/foEnd 同建同废，状态机判定段末与算 gap 都用它。
+     *  v1.8.4 起除最后一段外一律再提前 FOLLOW_STOP_EARLY_MS 触发，下限不早于本段起点 */
     private long[] foStop = null;
     /** 每段的起止句在拉平句表中的下标（高亮联动：播放中报段首句、gap 报段末句） */
     private int[] foFirst = null;
@@ -358,7 +365,9 @@ public class PlayerService extends Service {
             foLast[i] = chunks.get(i).lastFlat;
         }
         // v1.8.1 实际停止点：本段末句与下一段首句同小节 → 停到下一段起点（重合）；
-        // 跨小节、最后一段 → 停在本段自身句末
+        // 跨小节、最后一段 → 停在本段自身句末。
+        // v1.8.4 在此基础上每段（最后一段除外）再提前 FOLLOW_STOP_EARLY_MS 触发，
+        // 补偿轮询＋位置上报的过冲；最后一段靠自然播完走完成计数，不提前防切书末
         for (int i = 0; i < chunks.size(); i++) {
             boolean sameChapter = false;
             if (i + 1 < chunks.size() && chapterMapOk) {
@@ -368,7 +377,12 @@ public class PlayerService extends Service {
                     sameChapter = flatChapter[lastF] == flatChapter[firstN];
                 }
             }
-            foStop[i] = sameChapter ? foStart[i + 1] : foEnd[i];
+            long stop = sameChapter ? foStart[i + 1] : foEnd[i];
+            if (i + 1 < chunks.size()) {
+                // 下限钳到本段起点：极短段提前后不得早于起点（防 foStop < foStart 倒挂）
+                stop = Math.max(foStart[i], stop - FOLLOW_STOP_EARLY_MS);
+            }
+            foStop[i] = stop;
         }
         return true;
     }
