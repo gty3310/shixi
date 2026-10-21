@@ -60,6 +60,12 @@ import java.time.LocalDate;
  *  普通连续播放不走此逻辑。gap 仍按 foStop 口径的实际播过时长推算。
  *  v1.8.4：每段停止点（最后一段除外）再提前 150ms 触发，补偿 50ms 轮询＋位置
  *  上报延迟的过冲（原先段末会吃掉下一段开头一两个字、恢复时又重念一遍）。
+ *  v1.8.6：固定 150ms 改为按倍速公式运行时计算——用户真机实测平均过冲 1 倍速
+ *  约 25ms、2 倍速约 50ms、3 倍速约 85ms，即过冲在真实时间里恒定约 25ms（50ms
+ *  轮询的半个间隔）、换算到音频时间轴才随倍速放大，固定值在低倍速属过度补偿。
+ *  提前量＝25ms×当前倍速＋25ms 固定余量，不再烘焙进 foStop（只存未提前原值），
+ *  判定与 gap 一律经 effStop() 现算，倍速中途改动下一段自然生效；最后一段不提前。
+ *  调试过冲读数改为相对原值采样（可为负＝净提前停了，预期落在约 −25ms 附近）。
  */
 public class PlayerService extends Service {
     public static final String ACTION_PLAY_TRACK = "com.ti.songdu.PLAY_TRACK";
@@ -125,10 +131,13 @@ public class PlayerService extends Service {
     private long followGapEndsAt = 0;
     /** v1.6.1：gap 时长倍数——停顿留本句真实时长的 1.5 倍（跟读者复诵比录音慢） */
     private static final double FOLLOW_GAP_FACTOR = 1.5;
-    /** v1.8.4：跟读停止点提前量（用户定）——状态机 50ms 轮询＋getCurrentPosition 上报
-     *  延迟会让暂停冲过停止点、吃掉下一段开头一两个字；每段 foStop（最后一段除外）
-     *  一律提前 150ms 触发补偿过冲。停止点本就落在静音中点附近，提前 150ms 仍在静音内 */
-    private static final long FOLLOW_STOP_EARLY_MS = 150;
+    /** v1.8.6：跟读停止点提前量按倍速公式运行时计算（v1.8.4 的固定 150ms 已废除）。
+     *  依据用户真机实测（v1.8.5 读数）：平均过冲 1 倍速约 25ms、2 倍速约 50ms、3 倍速
+     *  约 85ms——过冲在真实时间里恒定约 25ms（50ms 轮询的半个间隔），换算到音频
+     *  时间轴才随倍速放大。提前量＝基数（每倍速）25ms × 当前倍速 ＋ 固定余量 25ms
+     *  （补 App 测不到的输出延迟）。foStop 只存未提前的原值，判定经 effStop() 现算 */
+    private static final long FOLLOW_STOP_EARLY_PER_SPEED_MS = 25;
+    private static final long FOLLOW_STOP_EARLY_MARGIN_MS = 25;
     /** 当前句这一段是从哪个媒体位置开始播的；gap＝(句末−段始)/倍速，即实际听到的时长 */
     private long followSegFrom = 0;
     /** watcher 已接管最后一句的完成处理时置真，防 onCompletion 再走旧路径重复计数 */
@@ -138,16 +147,18 @@ public class PlayerService extends Service {
     private String foTrackId = null;
     private long[] foStart = null;
     private long[] foEnd = null;
-    /** v1.8.1 每段的实际停止点：与下一段同小节时＝下一段 startMs（切点与下一句起点
-     *  完全重合，句间音频一帧不跳）；跨小节或最后一段时＝本段自身 endMs（小节间停顿
-     *  保持原样）。与 foStart/foEnd 同建同废，状态机判定段末与算 gap 都用它。
-     *  v1.8.4 起除最后一段外一律再提前 FOLLOW_STOP_EARLY_MS 触发，下限不早于本段起点 */
+    /** v1.8.1 每段的实际停止点（未提前的原值）：与下一段同小节时＝下一段 startMs（切点
+     *  与下一句起点完全重合，句间音频一帧不跳）；跨小节或最后一段时＝本段自身 endMs
+     *  （小节间停顿保持原样）。与 foStart/foEnd 同建同废。
+     *  v1.8.6 起提前量不再烘焙进本数组：状态机判定段末与算 gap 都改经 effStop() 现算 */
     private long[] foStop = null;
     /** 每段的起止句在拉平句表中的下标（高亮联动：播放中报段首句、gap 报段末句） */
     private int[] foFirst = null;
     private int[] foLast = null;
     // ---------- v1.8.5 跟读调试读数（纯旁路采样：只读不写判定量，不参与任何跟读判定） ----------
-    /** 停止过冲统计：followStep 判定 pos>=foStop 触发段末的那一刻采样 pos−foStop（ms）。
+    /** 停止过冲统计：followStep 判定段末的那一刻采样（ms）。v1.8.6 起判定点已前移
+     *  到 effStop，读数口径改为相对**未提前的原始停止点**：over＝触发位置−foStop，
+     *  可为负（负＝净提前停了，即提前量＋余量盖过了过冲；预期均值约 −25ms）。
      *  last 最近一次 / sum 累计和（平均＝sum/count）/ max 最大值 / count 样本数（段数） */
     public long foDbgOverLast = 0;
     public long foDbgOverSum = 0;
@@ -416,10 +427,10 @@ public class PlayerService extends Service {
             foFirst[i] = chunks.get(i).firstFlat;
             foLast[i] = chunks.get(i).lastFlat;
         }
-        // v1.8.1 实际停止点：本段末句与下一段首句同小节 → 停到下一段起点（重合）；
-        // 跨小节、最后一段 → 停在本段自身句末。
-        // v1.8.4 在此基础上每段（最后一段除外）再提前 FOLLOW_STOP_EARLY_MS 触发，
-        // 补偿轮询＋位置上报的过冲；最后一段靠自然播完走完成计数，不提前防切书末
+        // v1.8.1 实际停止点（未提前的原值）：本段末句与下一段首句同小节 → 停到下一段
+        // 起点（重合）；跨小节、最后一段 → 停在本段自身句末。
+        // v1.8.6：提前量不再烘焙进 foStop（v1.8.4 曾在此减固定 150ms，已废除）——
+        // 判定与 gap 一律经 effStop() 按当前倍速现算，倍速中途改动时下一段自然生效
         for (int i = 0; i < chunks.size(); i++) {
             boolean sameChapter = false;
             if (i + 1 < chunks.size() && chapterMapOk) {
@@ -429,14 +440,21 @@ public class PlayerService extends Service {
                     sameChapter = flatChapter[lastF] == flatChapter[firstN];
                 }
             }
-            long stop = sameChapter ? foStart[i + 1] : foEnd[i];
-            if (i + 1 < chunks.size()) {
-                // 下限钳到本段起点：极短段提前后不得早于起点（防 foStop < foStart 倒挂）
-                stop = Math.max(foStart[i], stop - FOLLOW_STOP_EARLY_MS);
-            }
-            foStop[i] = stop;
+            foStop[i] = sameChapter ? foStart[i + 1] : foEnd[i];
         }
         return true;
+    }
+
+    /** v1.8.6 有效停止点（运行时现算、不缓存进数组）：最后一段恒为未提前的原值
+     *  （靠自然播完走完成计数，不提前防切书末）；其余段＝原值 −（基数 25ms × 当前
+     *  倍速 ＋ 固定余量 25ms），下限钳到本段起点（极短段防有效停止点 < 起点倒挂）。
+     *  倍速取 store.speed 的现行值，每次调用现算——倍速中途改动，下一段即按新值 */
+    private long effStop(int i) {
+        if (foStop == null || i < 0 || i >= foStop.length) return Long.MAX_VALUE;
+        if (i >= foStop.length - 1) return foStop[i];
+        long early = Math.round(FOLLOW_STOP_EARLY_PER_SPEED_MS * (double) store.speed)
+                + FOLLOW_STOP_EARLY_MARGIN_MS;
+        return Math.max(foStart[i], foStop[i] - early);
     }
 
     /** 位置 → 当前句：最后一个 start<=pos 的句子；已过其句末（句间停顿/章题秒数）归下一句，
@@ -508,9 +526,11 @@ public class PlayerService extends Service {
             followIndex = -1;
             return;
         }
-        // v1.8.1 容差与段末判定都按实际停止点 foStop（同节内已延长到下一段起点）：
-        // 若还按 foEnd+300 判越界，同节句间停顿 >300ms 时会在延长区被误判 seek 而跳段
-        if (pos < foStart[followIndex] - 300 || pos > foStop[followIndex] + 300) {
+        // v1.8.1 容差与段末判定都按实际停止点（同节内已延长到下一段起点）：
+        // 若还按 foEnd+300 判越界，同节句间停顿 >300ms 时会在延长区被误判 seek 而跳段。
+        // v1.8.6 判定点改经 effStop() 现算（原值 −按倍速公式的提前量），容差基准同步
+        long stop = effStop(followIndex);
+        if (pos < foStart[followIndex] - 300 || pos > stop + 300) {
             // 位置被外部 seek 拉出当前句范围（seek 入口已同步过，这里是兜底）：重新同步
             int idx = followIndexForPosition(pos);
             if (idx < 0) {
@@ -521,15 +541,18 @@ public class PlayerService extends Service {
             }
             followIndex = idx;
             followSegFrom = pos;
+            stop = effStop(followIndex); // 重同步后按新段重算（与旧版读新段 foStop 同义）
         }
-        if (pos >= foStop[followIndex]) {
-            // v1.8.5 调试采样（旁路）：就在这个判定点记过冲＝pos−foStop，
-            // 是全工程唯一采样点（onFollowSentenceEnd 的其他调用路径不经此处、不误记）
+        if (pos >= stop) {
+            // 调试采样（旁路）：就在这个判定点记过冲，是全工程唯一采样点
+            // （onFollowSentenceEnd 的其他调用路径不经此处、不误记）。
+            // v1.8.6 口径：相对未提前的原始停止点 foStop——over＝pos−foStop，
+            // 判定点已前移到 effStop，故可为负（负＝净提前停了）
             try {
                 long over = pos - foStop[followIndex];
                 foDbgOverLast = over;
                 foDbgOverSum += over;
-                if (over > foDbgOverMax) foDbgOverMax = over;
+                if (foDbgOverCount == 0 || over > foDbgOverMax) foDbgOverMax = over;
                 foDbgOverCount++;
             } catch (Exception ignored) {
             }
@@ -538,8 +561,10 @@ public class PlayerService extends Service {
     }
 
     /** 当前段播完：最后一段走整曲完成；否则暂停并进入 gap（时长＝本段实际播过/倍速 ×1.5）。
-     *  v1.8.1「实际播过」按 foStop 口径：同节内播满到下一段起点才停，延长的那截
-     *  句间音频用户确实听到了，计入时长才与「gap＝刚才听到的真实时长×1.5」自洽 */
+     *  v1.8.1「实际播过」按停止点口径：同节内播满到下一段起点才停，延长的那截
+     *  句间音频用户确实听到了，计入时长才与「gap＝刚才听到的真实时长×1.5」自洽。
+     *  v1.8.6 起 stopAt 取 effStop（与 followStep 判定同一 helper）：gap 公式不变，
+     *  只是把「实际播过」按提前后的停止点算，与真实听到的时长更贴 */
     private void onFollowSentenceEnd() {
         int idx = followIndex;
         if (idx < 0 || foEnd == null || idx >= foEnd.length) {
@@ -554,7 +579,7 @@ public class PlayerService extends Service {
             finishFollowPass();
             return;
         }
-        long stopAt = (foStop != null && idx < foStop.length) ? foStop[idx] : foEnd[idx];
+        long stopAt = (foStop != null && idx < foStop.length) ? effStop(idx) : foEnd[idx];
         long gapMs = (long) ((stopAt - followSegFrom) / store.speed * FOLLOW_GAP_FACTOR);
         if (gapMs < 300) gapMs = 300;
         pausePlayer();
