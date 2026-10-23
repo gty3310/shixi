@@ -61,6 +61,59 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
+    <!-- v1.9.0 竖排固定注栏：注文不进竖排列流，改在页面下方固定一条显示当前句的注
+         （可滚动看全文）＋同款页脚（点按切版本）。仅竖排＋注释开＋本书有注时由
+         ReaderActivity 置为可见；左侧朱砂竖线与阅读页内的注高亮同色。 -->
+    <LinearLayout
+        android:id="@+id/readerNoteBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#EFE9DC"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <View
+            android:layout_width="3dp"
+            android:layout_height="match_parent"
+            android:background="#9E3B2B" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <ScrollView
+                android:id="@+id/readerNoteScroll"
+                android:layout_width="match_parent"
+                android:layout_height="104dp">
+
+                <TextView
+                    android:id="@+id/readerNoteText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingMultiplier="1.35"
+                    android:paddingLeft="12dp"
+                    android:paddingTop="8dp"
+                    android:paddingRight="12dp"
+                    android:paddingBottom="4dp"
+                    android:textColor="#4A4234"
+                    android:textSize="13sp" />
+            </ScrollView>
+
+            <TextView
+                android:id="@+id/readerNoteFooter"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingLeft="12dp"
+                android:paddingTop="2dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="8dp"
+                android:textColor="#A97C2C"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- 底部小播放栏（沉浸模式整条隐藏） -->
     <LinearLayout
         android:id="@+id/readerBottomBar"
@@ -180,6 +233,19 @@
                 android:textColor="#F0CDA0"
                 android:textSize="13sp"
                 android:visibility="gone" />
+
+            <!-- v1.9.0 注释开关：与跟读并列，呈现口径一致（开＝朱砂实心 pill） -->
+            <TextView
+                android:id="@+id/btnRNotes"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingLeft="12dp"
+                android:paddingTop="6dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="6dp"
+                android:text="注释 关"
+                android:textColor="#DDD6CB"
+                android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/btnRFont"

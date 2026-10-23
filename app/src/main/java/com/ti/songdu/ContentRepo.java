@@ -33,6 +33,15 @@ import java.util.Map;
  */
 public class ContentRepo {
 
+    /** v1.9.0 注释块引用：古人按段注，一块注覆盖连续若干句；text 挂在块首句的数据上，
+     *  这里存的是「覆盖本句的那一块」在全书拉平序中的起止下标（0 基、含两端）与注文。
+     *  块有嵌套时以起点最晚（最贴身）的那块为准。 */
+    public static class NoteRef {
+        public String text;
+        public int startFlat;
+        public int endFlat;
+    }
+
     public static class Sentence {
         public String id;
         /** 内容包原始时间（原速完整版口径）；noAudio 时为 -1 */
@@ -42,6 +51,9 @@ public class ContentRepo {
         public String textS;
         public String textT;
         public List<String> pinyin = new ArrayList<>();
+        /** v1.9.0 覆盖本句的注（张居正直解 / 朱熹集注）；该版本下无块覆盖时为 null */
+        public NoteRef noteZj;
+        public NoteRef noteJz;
         /** v1.7 句内可停标点点位（，。；！？，逐字对齐＋静音吸附定时间，个别估算点位
          *  在生成数据时已标记）：breakPos[i] 为标点在 textT 中的 UTF-16 下标（升序），
          *  breakMs[i] 为内容包原始时间轴毫秒（与 startMs 同口径）；无内部点位时为 null */
@@ -230,6 +242,7 @@ public class ContentRepo {
             b.title = o.optString("title", "");
             b.audioDurationMs = o.getLong("audioDurationMs");
             b.rawJson = raw;
+            List<JSONObject> sentObjs = new ArrayList<>();
             JSONArray chs = o.getJSONArray("chapters");
             for (int i = 0; i < chs.length(); i++) {
                 JSONObject co = chs.getJSONObject(i);
@@ -268,13 +281,95 @@ public class ContentRepo {
                     }
                     ch.sentences.add(s);
                     b.flat.add(s);
+                    sentObjs.add(so);
                 }
                 b.chapters.add(ch);
+            }
+            // v1.9.0：《大学》《中庸》挂注释（assets/notes/<bookId>_notes.json）；
+            // 挂上后把带注的 JSON 重新序列化为 rawJson，阅读页注入即带注。
+            // 《论语》与用户导入书无注文件，attachNotes 直接返回 false、零回退。
+            if (attachNotes(ctx, b, sentObjs)) {
+                b.rawJson = o.toString();
             }
             CACHE.put(bookId, b);
             return b;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * v1.9.0 注释挂载：注数据文件结构 {sentenceId: {zhijie, jizhu, zhijieSpan, jizhuSpan}}，
+     * 注文只挂在块首句、span 为该块覆盖的句数（块注）。本方法对每个版本先收集全部注块，
+     * 再为每一句判定覆盖它的注块（多块覆盖时取起点最晚的那块，处理集注的嵌套小块），
+     * 把判定结果同时写进 Sentence 字段（供竖排原生注栏用）与内容包 JSON 的句子对象
+     * （新增 "nt" 字段：{"zj"/"jz": {"t": 注文, "a": 块首拉平下标, "b": 块末拉平下标}}，
+     * 供阅读页注入）。无注文件/解析失败返回 false，调用方保持原 rawJson 不动。
+     */
+    private static boolean attachNotes(Context ctx, Book b, List<JSONObject> sentObjs) {
+        String raw;
+        try {
+            InputStream in = ctx.getAssets().open("notes/" + b.bookId + "_notes.json");
+            byte[] buf = new byte[in.available()];
+            int n = in.read(buf);
+            in.close();
+            if (n <= 0) return false;
+            raw = new String(buf, 0, n, StandardCharsets.UTF_8);
+        } catch (Exception noNotes) {
+            return false;
+        }
+        try {
+            JSONObject notes = new JSONObject(raw);
+            int total = b.flat.size();
+            boolean any = false;
+            String[][] vers = {{"zhijie", "zj"}, {"jizhu", "jz"}};
+            for (String[] v : vers) {
+                String key = v[0], shortKey = v[1];
+                List<Integer> starts = new ArrayList<>();
+                List<Integer> ends = new ArrayList<>();
+                List<String> texts = new ArrayList<>();
+                for (int i = 0; i < total; i++) {
+                    JSONObject e = notes.optJSONObject(b.flat.get(i).id);
+                    if (e == null || e.isNull(key)) continue;
+                    String t = e.optString(key, null);
+                    if (t == null || t.length() == 0) continue;
+                    int span = Math.max(1, e.optInt(key + "Span", 1));
+                    starts.add(i);
+                    ends.add(Math.min(total - 1, i + span - 1));
+                    texts.add(t);
+                }
+                for (int i = 0; i < total; i++) {
+                    int best = -1;
+                    for (int k = 0; k < starts.size(); k++) {
+                        if (starts.get(k) <= i && i <= ends.get(k)
+                                && (best < 0 || starts.get(k) > starts.get(best))) {
+                            best = k;
+                        }
+                    }
+                    if (best < 0) continue;
+                    NoteRef ref = new NoteRef();
+                    ref.text = texts.get(best);
+                    ref.startFlat = starts.get(best);
+                    ref.endFlat = ends.get(best);
+                    if ("zhijie".equals(key)) b.flat.get(i).noteZj = ref;
+                    else b.flat.get(i).noteJz = ref;
+                    JSONObject so = sentObjs.get(i);
+                    JSONObject nt = so.optJSONObject("nt");
+                    if (nt == null) {
+                        nt = new JSONObject();
+                        so.put("nt", nt);
+                    }
+                    JSONObject one = new JSONObject();
+                    one.put("t", ref.text);
+                    one.put("a", ref.startFlat);
+                    one.put("b", ref.endFlat);
+                    nt.put(shortKey, one);
+                    any = true;
+                }
+            }
+            return any;
+        } catch (Exception e) {
+            return false;
         }
     }
 

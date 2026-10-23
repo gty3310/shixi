@@ -18,6 +18,15 @@ body.nopy .txt{line-height:1.95}
 section.ch h2{font-size:1.02em;line-height:1.5;color:#9E3B2B;margin:1.1em 0 .45em;font-weight:700;letter-spacing:.04em;}
 section.ch:first-child h2{margin-top:.15em}
 .note{font-size:.72em;color:#A97C2C;margin:-.25em 0 .55em;}
+/* 注释（v1.9.0）：注块是句后同级 span，默认藏起；body.noteson（横排）才成块展示。
+   竖排永不进列流（!important），竖排注释走原生固定注栏。注文小一号、色淡一档，
+   左侧细竖线＋浅底与正文分层；.cur 时竖线转朱砂、注文转朱砂深色、底色加深，与正文高亮同步。 */
+.ntb{display:none;}
+body.noteson .ntb{display:block;font-size:.76em;line-height:1.8;color:#6E6455;background:rgba(169,124,44,.07);border-left:3px solid #D8CDB4;padding:.5em .75em;margin:.4em 0 .9em;text-align:justify;}
+body.vert .ntb{display:none !important;}
+.ntb .ntf{display:block;margin-top:.35em;font-size:.86em;color:#A97C2C;cursor:pointer;user-select:none;-webkit-user-select:none;}
+.ntb.cur{border-left-color:#9E3B2B;background:rgba(158,59,43,.12);}
+.ntb.cur .ntt{color:#8A3226;}
 p{margin:0;text-align:justify;}
 .s{border-bottom:2px solid transparent;padding-bottom:1px;scroll-margin-top:14px;}
 body.vert .s{scroll-margin-top:0;scroll-margin-right:14px;}
@@ -54,6 +63,7 @@ body.vert #pgHint{display:block;}
 <script>
 var BOOK = __BOOK_JSON__;
 var stateTrad = __TRAD__;
+var notesVer = '__NOTES_VER__';
 var cur = -1;
 var gapOn = false;
 var immersive = false;
@@ -85,6 +95,57 @@ function sentHTML(s){
   }
   return '<span class="s' + (s.noAudio ? ' na' : '') + '" id="si' + s._i +
          '" data-i="' + s._i + '">' + out + '</span>';
+}
+/* ===== 注释（v1.9.0）=====
+   句子对象的 nt 字段由 ContentRepo 注入：nt.zj / nt.jz = {t 注文, a 块首拉平下标,
+   b 块末拉平下标}，是「覆盖本句的那一块」在该版本下的判定结果。显示时优先当前
+   选定版本（notesVer），该版本无块覆盖才回退另一家，页脚如实标实际显示的那家。
+   古人按段注、块内每句共用此注，所以每句后面都挂同一块注（本节口径）。
+   注块是句子 span 的同级后随元素（不在 .s 内部，不干扰小句拆分与点句 seek）。 */
+function noteFor(s){
+  if (!s || !s.nt) return null;
+  var k1 = notesVer === 'zhijie' ? 'zj' : 'jz';
+  var k2 = k1 === 'zj' ? 'jz' : 'zj';
+  if (s.nt[k1]) return {t:s.nt[k1].t, a:s.nt[k1].a, b:s.nt[k1].b, ver:k1};
+  if (s.nt[k2]) return {t:s.nt[k2].t, a:s.nt[k2].a, b:s.nt[k2].b, ver:k2};
+  return null;
+}
+function noteFooter(n){
+  var lab = n.ver === 'zj' ? '张居正的版本' : '朱熹的版本';
+  if (n.b > n.a) lab += ' · 本注管第 ' + (n.a + 1) + '–' + (n.b + 1) + ' 句';
+  return lab + ' ⌄';
+}
+function noteHTML(s){
+  var n = noteFor(s);
+  if (!n) return '';
+  return '<span class="ntb" id="nt' + s._i + '"><span class="ntt">' + esc(n.t) +
+         '</span><span class="ntf">' + esc(noteFooter(n)) + '</span></span>';
+}
+function fillNote(i){
+  var d = document.getElementById('nt' + i);
+  if (!d) return;
+  var n = noteFor(flat[i]);
+  if (!n) return;
+  d.querySelector('.ntt').textContent = n.t;
+  d.querySelector('.ntf').textContent = noteFooter(n);
+}
+/* 版本切换：全书注块按新版本重填（文本＋页脚），选择由原生侧持久化后回推 */
+function setNotesVer(v){
+  notesVer = v;
+  for (var i = 0; i < flat.length; i++) fillNote(i);
+}
+function setNotesOn(on){
+  document.body.classList.toggle('noteson', !!on);
+}
+/* 当前句的注块同步亮起：与 markCur 同步调用；同块内换句时新句的注块接棒亮起
+   （块内每句各有一份同文注块，亮的始终是当前句那一份） */
+var curNoteEl = null;
+function markNote(i){
+  if (curNoteEl){ curNoteEl.classList.remove('cur'); curNoteEl = null; }
+  if (i >= 0){
+    var n = document.getElementById('nt' + i);
+    if (n){ n.classList.add('cur'); curNoteEl = n; }
+  }
 }
 /* 翻页式跟随（v1.4.2，用户要求像读书翻页，不要当前句永远居中）：
    - 当前句完整落在可视区内 → 绝不滚动；
@@ -184,6 +245,7 @@ function markCur(i, scroll){
       if (scroll){ if (isVert()) vertFollow(el); else pageToSentence(el); }
     }
   }
+  markNote(i);
 }
 function setCur(i, scroll){ markCur(i, scroll); }
 /* ===== 小句级高亮（v1.8.2）=====
@@ -280,12 +342,13 @@ function render(){
   /* v1.5 分批渲染：论语单篇最长约 130 句、带注音的 DOM 节点数千，先出前两章
      立即可读，其余每批 4 章在后续帧补齐（元素齐了之后再补发一次当前句高亮），
      避免一次性 innerHTML 上万节点卡住首屏。大学/中庸章数少，行为与旧版无异。 */
+  curNoteEl = null;
   var parts = [];
   BOOK.chapters.forEach(function(ch){
     var h = '<section class="ch"><h2>' + esc(ch.title) + '</h2>';
     if (ch.note) h += '<div class="note">' + esc(ch.note) + '</div>';
     h += '<p>';
-    ch.sentences.forEach(function(s){ h += sentHTML(s); });
+    ch.sentences.forEach(function(s){ h += sentHTML(s); h += noteHTML(s); });
     h += '</p></section>';
     parts.push(h);
   });
@@ -341,6 +404,9 @@ document.addEventListener('click', function(e){
     if (e.clientX <= 28){ flipPage(1, true); return; }
     if (e.clientX >= window.innerWidth - 28){ flipPage(-1, true); return; }
   }
+  /* 注释页脚＝版本切换入口（走原生对话框）；注块本体点按不触发任何动作（不 seek、不沉浸） */
+  if (e.target.closest && e.target.closest('.ntf')){ Bridge.pickNoteVer(); return; }
+  if (e.target.closest && e.target.closest('.ntb')) return;
   var t = e.target;
   var s = t.closest ? t.closest('.s') : null;
   if (s){

@@ -70,6 +70,13 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private View topBar, bottomBar;
     private TextView btnRToggle, btnRSpeed, btnRLoop, btnRScript, btnRPinyin, btnROrient, btnFollow;
     private TextView btnRFollow;
+    /** v1.9.0 注释开关钮与竖排固定注栏（注文/页脚/滚动容器） */
+    private TextView btnRNotes;
+    private View readerNoteBar;
+    private TextView readerNoteText, readerNoteFooter;
+    private android.widget.ScrollView readerNoteScroll;
+    /** 竖排注栏上次内容键（句号＋版本＋块首），变化才重设文本，避免轮询里反复刷 */
+    private String noteBarKey = null;
     /** v1.7 跟读字数小钮（跟读开时显示，如「15字」）与底部说明行 */
     private TextView btnRFollowChars;
     private TextView readerFollowHint;
@@ -85,6 +92,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private SharedPreferences prefs;
     private boolean useTrad, pinyinOn, vertical, loopOn;
     private int fontIdx;
+    /** v1.9.0 注释开关与选定版本（"zhijie" 张居正（默认） / "jizhu" 朱熹），独立持久化 */
+    private boolean notesOn;
+    private String notesVer = "zhijie";
+    /** 本书是否有注数据（仅《大学》《中庸》内容包在 ContentRepo 挂得上注） */
+    private boolean hasNotes;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private int curSentence = -1;
@@ -126,6 +138,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         }
         scale = ContentRepo.scaleFor(track, book);
         buildTimeline();
+        for (ContentRepo.Sentence s : book.flat) {
+            if (s.noteZj != null || s.noteJz != null) { hasNotes = true; break; }
+        }
 
         prefs = getSharedPreferences("reader_prefs", MODE_PRIVATE);
         useTrad = prefs.getBoolean("trad", true);
@@ -133,6 +148,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         vertical = prefs.getBoolean("vertical", false);
         fontIdx = prefs.getInt("font", 1);
         loopOn = prefs.getBoolean("loop", true);
+        notesOn = prefs.getBoolean("notes", false);
+        notesVer = prefs.getString("notesVer", "zhijie");
 
         topBar = findViewById(R.id.readerTopBar);
         bottomBar = findViewById(R.id.readerBottomBar);
@@ -141,6 +158,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRLoop = findViewById(R.id.btnRLoop);
         btnRFollow = findViewById(R.id.btnRFollow);
         btnRFollowChars = findViewById(R.id.btnRFollowChars);
+        btnRNotes = findViewById(R.id.btnRNotes);
+        readerNoteBar = findViewById(R.id.readerNoteBar);
+        readerNoteText = findViewById(R.id.readerNoteText);
+        readerNoteFooter = findViewById(R.id.readerNoteFooter);
+        readerNoteScroll = findViewById(R.id.readerNoteScroll);
         readerFollowHint = findViewById(R.id.readerFollowHint);
         readerFollowDebug = findViewById(R.id.readerFollowDebug);
         readerPageInfo = findViewById(R.id.readerPageInfo);
@@ -200,6 +222,17 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                     : "跟读已关闭", Toast.LENGTH_SHORT).show();
         });
         btnRFollowChars.setOnClickListener(v -> showChunkCharsDialog());
+        btnRNotes.setOnClickListener(v -> {
+            notesOn = !notesOn;
+            prefs.edit().putBoolean("notes", notesOn).apply();
+            web.evaluateJavascript("setNotesOn(" + notesOn + ")", null);
+            refreshNotesButton();
+            refreshNoteBar();
+            if (notesOn && !hasNotes) {
+                Toast.makeText(this, "本书暂无注释数据", Toast.LENGTH_SHORT).show();
+            }
+        });
+        readerNoteFooter.setOnClickListener(v -> showNoteVerDialog());
         findViewById(R.id.btnRFont).setOnClickListener(v -> showFontPanel());
         btnRScript.setOnClickListener(v -> {
             useTrad = !useTrad;
@@ -218,6 +251,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             prefs.edit().putBoolean("vertical", vertical).apply();
             web.evaluateJavascript("setVert(" + vertical + ")", null);
             refreshBarLabels();
+            refreshNoteBar();
         });
         applyLoop();
         refreshBarLabels();
@@ -226,6 +260,111 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 : getSharedPreferences("follow_prefs", MODE_PRIVATE).getBoolean("enabled", false);
         lastFollowOn = fOn;
         refreshFollowButton(fOn);
+        refreshNotesButton();
+        refreshNoteBar();
+    }
+
+    /** v1.9.0 注释开关钮呈现：与跟读钮同口径（开＝朱砂实心 pill＋白字加粗，关＝无底浅字） */
+    private void refreshNotesButton() {
+        if (btnRNotes == null) return;
+        btnRNotes.setText(notesOn ? "注释 开" : "注释 关");
+        float density = getResources().getDisplayMetrics().density;
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(999 * density);
+        if (notesOn) {
+            g.setColor(0xFF9E3B2B);
+            btnRNotes.setTextColor(0xFFFFFFFF);
+            btnRNotes.setTypeface(null, Typeface.BOLD);
+        } else {
+            g.setColor(0x00000000);
+            btnRNotes.setTextColor(0xFFDDD6CB);
+            btnRNotes.setTypeface(null, Typeface.NORMAL);
+        }
+        btnRNotes.setBackground(g);
+    }
+
+    /** v1.9.0 版本选择：与每段字数同款单选对话框；页脚点按（页内/竖排注栏）都走这里。
+     *  选中即持久化，并回推 JS 全书重填注文＋刷新竖排注栏。 */
+    private void showNoteVerDialog() {
+        String[] labels = {"张居正《四书直解》", "朱熹《四书章句集注》"};
+        int checked = "jizhu".equals(notesVer) ? 1 : 0;
+        new AlertDialog.Builder(this)
+                .setTitle("注释版本")
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    notesVer = which == 1 ? "jizhu" : "zhijie";
+                    prefs.edit().putString("notesVer", notesVer).apply();
+                    web.evaluateJavascript("setNotesVer('" + notesVer + "')", null);
+                    noteBarKey = null;
+                    refreshNoteBar();
+                    d.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** 本句要显示的注：优先选定版本，无块覆盖才回退另一家；zjFlag[0] 回报实际用的哪家 */
+    private ContentRepo.NoteRef displayNote(ContentRepo.Sentence s, boolean[] zjFlag) {
+        boolean zjFirst = "zhijie".equals(notesVer);
+        ContentRepo.NoteRef first = zjFirst ? s.noteZj : s.noteJz;
+        if (first != null) {
+            zjFlag[0] = zjFirst;
+            return first;
+        }
+        ContentRepo.NoteRef second = zjFirst ? s.noteJz : s.noteZj;
+        if (second != null) {
+            zjFlag[0] = !zjFirst;
+            return second;
+        }
+        return null;
+    }
+
+    /**
+     * v1.9.0 竖排固定注栏刷新：仅「竖排＋注释开＋本书有注」时可见（横排注在页内）。
+     * 内容＝当前句的注（与页内同口径：选定版本优先、缺则回退、页脚标实际版本与块范围）；
+     * 无当前句时给占位说明。内容键（句号/版本/块首）不变则不重设文本，轮询里可每拍调用。
+     */
+    private void refreshNoteBar() {
+        if (readerNoteBar == null) return;
+        boolean show = vertical && notesOn && hasNotes;
+        readerNoteBar.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) {
+            noteBarKey = null;
+            return;
+        }
+        String defLab = "zhijie".equals(notesVer) ? "张居正的版本" : "朱熹的版本";
+        if (curSentence < 0 || curSentence >= book.flat.size()) {
+            String key = "ph|" + notesVer;
+            if (!key.equals(noteBarKey)) {
+                noteBarKey = key;
+                readerNoteText.setText("播放或点按一句，这里显示这一句的注释。");
+                readerNoteFooter.setText(defLab + " ⌄");
+                readerNoteScroll.scrollTo(0, 0);
+            }
+            return;
+        }
+        boolean[] zj = new boolean[1];
+        ContentRepo.NoteRef ref = displayNote(book.flat.get(curSentence), zj);
+        if (ref == null) {
+            String key = "none|" + curSentence;
+            if (!key.equals(noteBarKey)) {
+                noteBarKey = key;
+                readerNoteText.setText("本句暂无注释。");
+                readerNoteFooter.setText(defLab + " ⌄");
+                readerNoteScroll.scrollTo(0, 0);
+            }
+            return;
+        }
+        String key = curSentence + "|" + notesVer + "|" + ref.startFlat;
+        if (!key.equals(noteBarKey)) {
+            noteBarKey = key;
+            readerNoteText.setText(ref.text);
+            String lab = zj[0] ? "张居正的版本" : "朱熹的版本";
+            if (ref.endFlat > ref.startFlat) {
+                lab += " · 本注管第 " + (ref.startFlat + 1) + "–" + (ref.endFlat + 1) + " 句";
+            }
+            readerNoteFooter.setText(lab + " ⌄");
+            readerNoteScroll.scrollTo(0, 0);
+        }
     }
 
     /** 跟读开关钮呈现：开＝朱砂实心 pill＋白字加粗（与速度/循环的浅金文字明显区分），关＝无底浅金字 */
@@ -336,8 +475,10 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             StringBuilder cls = new StringBuilder("fs").append(fontIdx);
             if (!pinyinOn) cls.append(" nopy");
             if (vertical) cls.append(" vert");
+            if (notesOn) cls.append(" noteson");
             return tpl.replace("__CLASSES__", cls.toString())
                     .replace("__TRAD__", String.valueOf(useTrad))
+                    .replace("__NOTES_VER__", notesVer)
                     .replace("__BOOK_JSON__", book.rawJson);
         } catch (Exception e) {
             return "<html><body>原文加载失败</body></html>";
@@ -455,7 +596,10 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             lastGapOn = gapOn;
             web.evaluateJavascript("setGap(" + gapOn + ")", null);
         }
-        if (!mine || tStart.length == 0) return;
+        if (!mine || tStart.length == 0) {
+            refreshNoteBar();
+            return;
+        }
 
         long pos = svc.currentPosition();
         int ti = findTimedIndex(pos);
@@ -479,6 +623,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 web.evaluateJavascript("setClause(" + cl + ")", null);
             }
         }
+        // v1.9.0 竖排注栏跟随当前句（内部按内容键去重，未变不刷）
+        refreshNoteBar();
     }
 
     /** 当前位置在该句内的小句序号：breakMs 缩放后 <= pos 的个数；无 breaks 时 0（整句一个小句） */
@@ -585,6 +731,12 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         public void naTap() {
             runOnUiThread(() ->
                     Toast.makeText(ReaderActivity.this, "这一句录音中未诵读", Toast.LENGTH_SHORT).show());
+        }
+
+        /** v1.9.0 页内注脚点按：与竖排注栏页脚共用同一个版本选择对话框 */
+        @JavascriptInterface
+        public void pickNoteVer() {
+            runOnUiThread(() -> showNoteVerDialog());
         }
 
         @JavascriptInterface
