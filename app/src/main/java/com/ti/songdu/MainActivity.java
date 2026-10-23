@@ -18,6 +18,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.DragEvent;
 import android.view.Gravity;
@@ -83,6 +84,11 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private static final int REQ_PICK = 1007;
     private static final int REQ_PICK_SRT_S = 1008;
     private static final int REQ_PICK_SRT_T = 1009;
+
+    // v1.10.0 悬浮控件权限指引：进程内至多弹一次（冷启动口径）；pendingOverlayGrant
+    // 标记「正从本页跳去系统设置授权」，onResume 回来时据此立即拉起悬浮件
+    private static boolean overlayHintShownThisProcess = false;
+    private boolean pendingOverlayGrant = false;
 
     // v1.8.2「添加书籍」弹窗的待选文件（选完点「添加」才真正导入）
     private Uri pendingAudioUri, pendingSrtSUri, pendingSrtTUri;
@@ -211,6 +217,57 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
         showPage(false);
         refreshAll();
+
+        // v1.10.0 悬浮播放控件（挂在 PlayerService 上）：全新启动（savedInstanceState
+        // 为 null）时清掉上次会话的「已关闭」标记并尝试拉起——用户上次点 ✕ 关掉的，
+        // 这次打开 App 会重新出现；未授悬浮窗权限时只给指引，本次冷启动至多弹一次。
+        if (savedInstanceState == null) {
+            getSharedPreferences(OverlayController.PREFS, MODE_PRIVATE)
+                    .edit().putBoolean("closed", false).apply();
+            if (OverlayController.canDraw(this)) {
+                ensureOverlayService();
+            } else if (!overlayHintShownThisProcess) {
+                overlayHintShownThisProcess = true;
+                showOverlayPermissionHint();
+            }
+        }
+    }
+
+    /** 拉起 PlayerService 并让它把悬浮件显示出来（服务已在跑时只是一次幂等 intent） */
+    private void ensureOverlayService() {
+        Intent i = new Intent(this, PlayerService.class)
+                .setAction(PlayerService.ACTION_REFRESH_OVERLAY);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(i);
+        } else {
+            startService(i);
+        }
+    }
+
+    /** 悬浮窗权限一次性指引（每次冷启动至多一次，可取消；去授权跳系统设置页） */
+    private void showOverlayPermissionHint() {
+        new AlertDialog.Builder(this)
+                .setTitle("悬浮播放按钮")
+                .setMessage("时习可以在屏幕侧边留一个半透明的半圆按钮：轻点播放/暂停，"
+                        + "长按展开看正在读的句子，在别的 App 上面也能用。\n\n"
+                        + "这需要系统里的「显示在其他应用上层」权限，授权一次即可；"
+                        + "不授权也不影响在 App 里正常使用。")
+                .setNegativeButton("下次再说", null)
+                .setPositiveButton("去授权", (d, w) -> {
+                    pendingOverlayGrant = true;
+                    try {
+                        startActivity(new Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (Exception e) {
+                        pendingOverlayGrant = false;
+                        try {
+                            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                })
+                .show();
     }
 
     // ---------- 文件选择与添加 ----------
@@ -1577,6 +1634,11 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         super.onResume();
         PlayerService.listener = this;
         refreshAll();
+        // v1.10.0：从系统设置授权页回来——权限已给就立即把悬浮件拉起来，不等下次冷启动
+        if (pendingOverlayGrant) {
+            pendingOverlayGrant = false;
+            if (OverlayController.canDraw(this)) ensureOverlayService();
+        }
     }
 
     @Override

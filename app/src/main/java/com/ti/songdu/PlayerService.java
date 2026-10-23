@@ -78,6 +78,8 @@ public class PlayerService extends Service {
     public static final String ACTION_PLAY_TRACK_AT = "com.ti.songdu.PLAY_TRACK_AT";
     public static final String ACTION_SEEK_TO = "com.ti.songdu.SEEK_TO";
     public static final String ACTION_SEEK_REL = "com.ti.songdu.SEEK_REL";
+    /** v1.10.0：仅要求服务把悬浮播放控件拉起来（MainActivity 打开/授权回来时发），不带播放语义 */
+    public static final String ACTION_REFRESH_OVERLAY = "com.ti.songdu.REFRESH_OVERLAY";
     public static final String EXTRA_TRACK_ID = "track_id";
     public static final String EXTRA_SEEK_POS = "seek_pos";
     public static final String EXTRA_SEEK_DELTA = "seek_delta";
@@ -95,6 +97,9 @@ public class PlayerService extends Service {
     public static Listener listener;
 
     private Store store;
+    /** v1.10.0 悬浮播放控件：挂在本服务上（不再起第二个前台服务、不多一个通知）；
+     *  其全部窗口操作在 OverlayController 内 try/catch 隔离，异常不影响播放 */
+    private OverlayController overlay;
     private MediaPlayer mp;
     private MediaSession session;
     private boolean prepared = false;
@@ -700,6 +705,13 @@ public class PlayerService extends Service {
         // 先进入前台，避免 startForegroundService 超时被杀
         startForegroundWith(buildNotification());
         handler.post(ticker);
+        // v1.10.0：前台站稳后再挂悬浮件（权限/关闭标记在 OverlayController 内判）
+        try {
+            overlay = new OverlayController(this);
+            overlay.tryShow();
+        } catch (Exception ignored) {
+            overlay = null;
+        }
     }
 
     /** MediaSession：让下拉通知栏 / 锁屏 / 快捷设置里的系统媒体控制能直接播放、暂停、切歌 */
@@ -1226,6 +1238,10 @@ public class PlayerService extends Service {
                 case ACTION_SEEK_REL:
                     seekRelative(intent.getLongExtra(EXTRA_SEEK_DELTA, 0));
                     break;
+                case ACTION_REFRESH_OVERLAY:
+                    // v1.10.0：只拉悬浮件，不动播放状态
+                    if (overlay != null) overlay.tryShow();
+                    break;
                 default:
                     break;
             }
@@ -1235,6 +1251,11 @@ public class PlayerService extends Service {
 
     @Override
     public void onDestroy() {
+        // v1.10.0：服务销毁先摘悬浮件，别留孤儿窗口
+        if (overlay != null) {
+            overlay.hide();
+            overlay = null;
+        }
         handler.removeCallbacks(ticker);
         stopFollowLoop();
         abandonFocus();
