@@ -55,11 +55,19 @@ body.vert{touch-action:none;overscroll-behavior:none;}
 /* 左缘翻页提示：只在左缘中部留一个 ≤20dp 的淡色小箭头，不占正文列宽（正文仍按全宽排） */
 #pgHint{display:none;position:fixed;left:3px;top:50%;transform:translateY(-50%);font-size:22px;line-height:1;color:rgba(38,34,28,.20);pointer-events:none;z-index:5;}
 body.vert #pgHint{display:block;}
+/* 竖排诊断读数（v1.10.1）：左下角极小淡字，页号/滚动位置/内容宽/校准模型全部取运行时实测值 */
+#vdbg{display:none;position:fixed;left:6px;bottom:6px;font-size:10px;line-height:1.5;color:rgba(38,34,28,.45);background:rgba(248,245,239,.55);padding:1px 6px;border-radius:6px;pointer-events:none;z-index:6;font-family:monospace;}
+body.vert #vdbg{display:block;}
+/* 竖排自校准的后备滚动主体（v1.10.1）：仅当窗口滚不动正文时才由 JS 给 body 加此类，
+   让 .txt 自己当滚动容器。必须显式给宽：.txt 在竖排下按内容撑开（实测宽=全文宽），
+   不钉到视口宽它就「自己装下全部内容」、无从内滚 */
+body.vert.vtxt .txt{overflow-x:auto;overflow-y:hidden;touch-action:none;width:100vw;}
 </style>
 </head>
 <body class="__CLASSES__">
 <div class="txt" id="txt"></div>
 <div id="pgHint">‹</div>
+<div id="vdbg"></div>
 <script>
 var BOOK = __BOOK_JSON__;
 var stateTrad = __TRAD__;
@@ -165,19 +173,21 @@ function pageToSentence(el){
   if (sentenceVisible(el)) return;
   el.scrollIntoView({block:'start', inline:'nearest'});
 }
-/* ===== 竖版分页（v1.8.0，用户定案：一屏一页、页面静止、像翻书）=====
-   原理：竖排下整幅正文是从右往左延展的长卷，窗口横向滚动。页宽 = 视口宽 W；
-   句子位置用「距长卷起始边（右端）的距离 d」度量：d = txtRect.right - elRect.right
+/* ===== 竖版分页（v1.8.0 定案：一屏一页、页面静止、像翻书；v1.10.1 滚动层重做）=====
+   页格几何（沿用，实测正确）：竖排下整幅正文是从右往左延展的长卷，页宽 = 视口宽 W；
+   句子位置用「距长卷起始边（右端）的距离 d」度量：d = refRight - elRect.right
    （两 rect 随滚动同移，d 与滚动位置无关）；页号 = floor(d / W)，固定页格。
-   翻页 = window.scrollTo 到该页的 scrollLeft：Chromium 竖排（vertical-rl）是
-   负值模型，第 k 页 scrollLeft = -k*W，behavior:'smooth' 即横向滑动动画。
    当前句只原地变色高亮、绝不自动滚动；仅当播放/跟读推进到的句子不在当前页
    时才翻页。手动翻页（点左/右缘 28px 热区或左右滑）走 flipPage，并通知原生侧
    暂停跟随（与既有 userScrolled 机制一致）。横版一律不走这套逻辑。 */
 var pgCur = 0, pgTotal = 0;
 function isVert(){ return document.body.classList.contains('vert'); }
 function txtEl(){ return document.getElementById('txt'); }
+function firstSection(){ return txtEl().querySelector('section.ch'); }
 function contentWidth(){
+  /* .txt 自己当滚动容器时用它的 scrollWidth；窗口滚动时用 #txt 右缘到 #fin 左缘的跨度
+     （#txt 的 border box 宽在本引擎实测等于内容宽，fin 项是另一量法的交叉校验） */
+  if (V.subject === 'txt') return txtEl().scrollWidth || 0;
   var tr = txtEl().getBoundingClientRect();
   var w = tr.width;
   var fin = document.getElementById('fin');
@@ -187,26 +197,201 @@ function contentWidth(){
 function vertMeasure(){
   pgTotal = Math.max(1, Math.ceil(contentWidth() / window.innerWidth));
 }
+/* 距起始边的参照右缘：窗口滚动时 #txt 右缘随文档同移；.txt 当容器时它自己的边不动，
+   改用第一章 section 的右缘（内容本身，随内滚同移） */
+function vertRefRight(){
+  if (V.subject === 'txt'){
+    var s = firstSection();
+    if (s) return s.getBoundingClientRect().right;
+  }
+  return txtEl().getBoundingClientRect().right;
+}
 function pageOfSentence(el){
-  var tr = txtEl().getBoundingClientRect();
   var r = el.getBoundingClientRect();
-  var p = Math.floor((tr.right - r.right) / window.innerWidth);
+  var p = Math.floor((vertRefRight() - r.right) / window.innerWidth);
   return Math.max(0, Math.min(pgTotal - 1, p));
 }
 function reportPage(){
   if (window.Bridge && Bridge.pageInfo)
     Bridge.pageInfo(isVert() ? pgCur + 1 : 0, isVert() ? pgTotal : 0);
+  updateVdbg();
 }
-function goPage(k, animate){
+/* ===== 竖排滚动自校准（v1.10.1）=====
+   旧版假设「Chromium 竖排是负值模型、第 k 页 scrollLeft = -k*W」——2026-10-23 实测
+   （桌面 Chromium headless 复现，真机症状互证）证明不成立：本页根元素是 horizontal-tb、
+   竖排只加在 .txt 上，滚动模型由根滚动器决定——正文在文档里向右延展，结尾在文档左端、
+   开头在右端，scrollLeft ∈ [0, 内容宽-视口宽]，写入负值被钳到 0（「反向模型」：0=结尾、
+   最大值=开头）。旧 goPage 写出的负值全军覆没、画面一帧不动，pgCur 却乐观自增并向
+   原生侧谎报页码——打开停结尾、不自动翻页、滑动/点按无效、跳转无效，四个症状同源。
+   故本引擎不预设模型：进竖排/布局变化时实测——依次试探滚动主体（先窗口、
+   后 .txt 自身），把 scrollLeft 顶到两端读回真实可达区间，再看第一句在哪一端可见
+   定下「第 0 页的 scrollLeft」(sPage0)，每页朝另一端步进一个视口宽 (ds=±W)、钳在
+   区间内。负值/正值/反向三种模型都归结为这组实测参数。goPage 写完定时读回校验，
+   页号对不上就作废校准、强制重测并瞬时重试一次；另有 scroll 监听把 pgCur 持续
+   同步回实际位置，不再乐观漂移。校准按 (视口宽高, 内容宽) 缓存，布局变化自动重测。 */
+var V = {ok:false, subject:'win', sMin:0, sMax:0, sPage0:0, ds:0, cw:0, key:'', failKey:'', model:'?'};
+var calibBusy = false, calibWaiters = [];
+function subjectElFor(subj){
+  return subj === 'txt' ? txtEl() : (document.scrollingElement || document.documentElement);
+}
+function getSL(){
+  var se = subjectElFor(V.subject);
+  return se ? (se.scrollLeft || 0) : 0;
+}
+function setSL(v, animate){
+  var se = subjectElFor(V.subject);
+  if (!se) return;
+  if (animate){
+    try {
+      if (V.subject === 'win') window.scrollTo({left: v, behavior: 'smooth'});
+      else se.scrollTo({left: v, behavior: 'smooth'});
+      return;
+    } catch (e) {}
+  }
+  se.scrollLeft = v;
+}
+/* 第 k 页的 scrollLeft（纯函数：实测锚点 + 每页一个视口宽，钳在可达区间内） */
+function pageScrollLeft(k){
+  var s = V.sPage0 + V.ds * k;
+  return Math.max(V.sMin, Math.min(V.sMax, s));
+}
+/* 由实际 scrollLeft 反推页号（读回校验与 pgCur 同步用） */
+function pageFromSL(s){
+  if (!V.ok || !V.ds) return pgCur;
+  var k = Math.round((s - V.sPage0) / V.ds);
+  return Math.max(0, Math.min(pgTotal - 1, k));
+}
+function elVisibleX(el){
+  if (!el) return false;
+  var r = el.getBoundingClientRect();
+  return r.right > 2 && r.left < window.innerWidth - 2;
+}
+function vertRefRightFor(subj){
+  if (subj === 'txt'){
+    var s = firstSection();
+    if (s) return s.getBoundingClientRect().right;
+  }
+  return txtEl().getBoundingClientRect().right;
+}
+function calibKey(){
+  return window.innerWidth + 'x' + window.innerHeight + '|' + Math.round(contentWidth());
+}
+function ensureCalibrated(cb){
+  if (!isVert()){ if (cb) cb(false); return; }
+  if (V.ok && V.key === calibKey()){ if (cb) cb(true); return; }
+  if (!V.ok && V.failKey && V.failKey === calibKey()){ if (cb) cb(false); return; }
+  if (cb) calibWaiters.push(cb);
+  if (calibBusy) return;
+  calibBusy = true;
+  calibrateRun(function(ok){
+    calibBusy = false;
+    var ws = calibWaiters; calibWaiters = [];
+    for (var i = 0; i < ws.length; i++) ws[i](ok);
+  });
+}
+function calibrateRun(done){
+  var subjects = ['win', 'txt'];
+  var idx = 0;
+  (function next(){
+    if (idx >= subjects.length){
+      V.ok = false; V.subject = 'win'; V.model = 'fail';
+      document.body.classList.remove('vtxt');
+      V.failKey = calibKey();
+      updateVdbg();
+      done(false);
+      return;
+    }
+    probeSubject(subjects[idx++], function(ok){ if (ok) done(true); else next(); });
+  })();
+}
+/* 在候选主体上实测：顶两端读回区间 → 内容宽与区间对账 → 看第一句在哪端定 sPage0。
+   试探期间页面会短暂跳到两端（约 200ms），结束由调用方 goPage 落回目标页。 */
+function probeSubject(subj, done){
+  var W = window.innerWidth;
+  if (subj === 'txt') document.body.classList.add('vtxt');
+  else document.body.classList.remove('vtxt');
+  void document.body.offsetWidth; /* 强制重排，让滚动容器身份先生效 */
+  var se = subjectElFor(subj);
+  if (!se){ done(false); return; }
+  var sSave = se.scrollLeft || 0;
+  var cw = (subj === 'txt') ? (txtEl().scrollWidth || 0) : contentWidth();
+  function fail(){ try { se.scrollLeft = sSave; } catch (e) {} done(false); }
+  se.scrollLeft = -1000000000;
+  setTimeout(function(){
+    var sA = se.scrollLeft || 0;
+    se.scrollLeft = 1000000000;
+    setTimeout(function(){
+      var sB = se.scrollLeft || 0;
+      var sMin = Math.min(sA, sB), sMax = Math.max(sA, sB);
+      var range = sMax - sMin;
+      var need = cw - W;
+      /* 内容明显超过一页、这个主体却滚不出对应距离 → 它不是（合格的）滚动主体 */
+      if (need > 2 && range < need - 2){ fail(); return; }
+      var si0 = document.getElementById('si0');
+      se.scrollLeft = sMin;
+      setTimeout(function(){
+        var visMin = elVisibleX(si0), rMin = vertRefRightFor(subj);
+        se.scrollLeft = sMax;
+        setTimeout(function(){
+          var visMax = elVisibleX(si0), rMax = vertRefRightFor(subj);
+          var sPage0;
+          if (visMin && !visMax) sPage0 = sMin;
+          else if (visMax && !visMin) sPage0 = sMax;
+          else /* 两端都看得见第一句（内容仅略超一页）：取起始边离视口右缘更近的那端 */
+            sPage0 = Math.abs(rMin - W) <= Math.abs(rMax - W) ? sMin : sMax;
+          var endS = (sPage0 === sMin) ? sMax : sMin;
+          V.subject = subj; V.sMin = sMin; V.sMax = sMax; V.sPage0 = sPage0;
+          V.ds = endS >= sPage0 ? W : -W;
+          V.cw = cw; V.ok = true; V.failKey = '';
+          V.model = (subj === 'txt' ? 'txt-' : '') +
+            (sMin < 0 ? 'neg' : (sPage0 === sMax && sMax > 0 ? 'rev' : 'pos'));
+          V.key = calibKey();
+          updateVdbg();
+          done(true);
+        }, 50);
+      }, 50);
+    }, 50);
+  }, 50);
+}
+var verifyTimer = 0;
+function goPage(k, animate){ goPageInner(k, animate, false); }
+function goPageInner(k, animate, retried){
   if (!isVert()) return;
   vertMeasure();
   k = Math.max(0, Math.min(pgTotal - 1, k));
   pgCur = k;
-  window.scrollTo({left: -k * window.innerWidth, behavior: animate ? 'smooth' : 'auto'});
+  if (!V.ok){
+    ensureCalibrated(function(ok){ if (ok) goPageInner(k, animate, retried); });
+    reportPage();
+    return;
+  }
+  var startSL = getSL();
+  setSL(pageScrollLeft(k), animate);
   reportPage();
+  /* 写后读回校验：页号对不上（写入被钳/模型与实测不符）→ 作废校准强制重测，瞬时重试一次。
+     平滑滚动可能还没走完：只要读数还在朝目标变就宽限续等，稳定不动且页号不对才判失败 */
+  clearTimeout(verifyTimer);
+  if (!retried)
+    verifyTimer = setTimeout(function(){ verifyStep(k, animate ? 5 : 1, startSL); },
+                               animate ? 480 : 90);
+}
+function verifyStep(k, triesLeft, lastSL){
+  if (!isVert() || !V.ok) return;
+  var s = getSL();
+  if (pageFromSL(s) === k) return;
+  if (triesLeft > 0 && s !== lastSL){
+    verifyTimer = setTimeout(function(){ verifyStep(k, triesLeft - 1, s); }, 300);
+    return;
+  }
+  V.ok = false; V.failKey = '';
+  ensureCalibrated(function(ok){ if (ok) goPageInner(k, false, true); });
 }
 function vertFollow(el){
   vertMeasure();
+  if (!V.ok){
+    ensureCalibrated(function(ok){ if (ok) vertFollow(el); });
+    return;
+  }
   var p = pageOfSentence(el);
   if (p !== pgCur) goPage(p, true);
 }
@@ -214,12 +399,16 @@ function vertFollow(el){
 function repaginate(){
   if (!isVert()){ reportPage(); return; }
   vertMeasure();
-  var target = pgCur;
-  if (cur >= 0){
-    var el = document.getElementById('si' + cur);
-    if (el) target = pageOfSentence(el);
-  }
-  goPage(target, false);
+  ensureCalibrated(function(ok){
+    if (!isVert() || !ok) return;
+    vertMeasure();
+    var target = pgCur;
+    if (cur >= 0){
+      var el = document.getElementById('si' + cur);
+      if (el) target = pageOfSentence(el);
+    }
+    goPage(Math.max(0, Math.min(pgTotal - 1, target)), false);
+  });
 }
 function flipPage(dir, manual){
   if (!isVert()) return;
@@ -229,6 +418,36 @@ function flipPage(dir, manual){
   goPage(k, true);
   if (manual) Bridge.userScrolled();
 }
+/* pgCur 诚实化：滚动（程序平滑滚动/任何漂移）后按实际 scrollLeft 反推页号同步，
+   不再让 pgCur 停留在「写出去的值」上 */
+var scrollSyncQueued = false;
+function onScrollAny(){
+  if (!isVert() || !V.ok || scrollSyncQueued) return;
+  scrollSyncQueued = true;
+  setTimeout(function(){
+    scrollSyncQueued = false;
+    if (!isVert() || !V.ok) return;
+    var k = pageFromSL(getSL());
+    if (k !== pgCur){ pgCur = k; reportPage(); }
+    updateVdbg();
+  }, 60);
+}
+/* 诊断读数（值全部取运行时实测：页号/实际 scrollLeft/内容宽/校准出的模型名） */
+function updateVdbg(){
+  var d = document.getElementById('vdbg');
+  if (!d) return;
+  if (!isVert()){ d.textContent = ''; return; }
+  d.textContent = 'pg ' + (pgCur + 1) + '/' + pgTotal +
+    ' sl=' + Math.round(getSL()) +
+    ' cw=' + Math.round(contentWidth()) +
+    ' m=' + V.model;
+}
+/* 测试/诊断钩子：返回校准实测参数（无副作用） */
+window.__vertState = function(){
+  return {ok: V.ok, subject: V.subject, model: V.model, sMin: V.sMin, sMax: V.sMax,
+          sPage0: V.sPage0, ds: V.ds, pgCur: pgCur, pgTotal: pgTotal};
+};
+window.__vertCalibrate = function(){ V.ok = false; V.failKey = ''; ensureCalibrated(function(){}); };
 function markCur(i, scroll){
   if (cur >= 0){
     if (splitEl && splitIdx === cur) unsplit();
@@ -386,8 +605,8 @@ function setPinyin(on){
 }
 function setVert(v){
   document.body.classList.toggle('vert', v);
-  if (v){ requestAnimationFrame(repaginate); }
-  else { pgCur = 0; reportPage(); }
+  if (v){ setTimeout(repaginate, 30); }
+  else { document.body.classList.remove('vtxt'); pgCur = 0; reportPage(); }
 }
 function goTop(){
   if (isVert()){ goPage(0, false); return; }
@@ -418,8 +637,14 @@ document.addEventListener('click', function(e){
   immersive = true;
   Bridge.setImmersive(true);
 });
-document.addEventListener('touchmove', function(){ Bridge.userScrolled(); }, {passive:true});
-document.addEventListener('wheel', function(){ Bridge.userScrolled(); }, {passive:true});
+/* 横排：用户手动滚动后暂停跟随。竖排页面静止、无自由滚动，手动翻页已由
+   flipPage 自己上报 userScrolled，touchmove/wheel 不再重复上报（免得随手一碰
+   就把跟随闩锁 6 秒、且跟随恢复又只能靠已修复的 vertFollow 落页） */
+document.addEventListener('touchmove', function(){ if (!isVert()) Bridge.userScrolled(); }, {passive:true});
+document.addEventListener('wheel', function(){ if (!isVert()) Bridge.userScrolled(); }, {passive:true});
+/* 竖排 pgCur 同步：窗口与 .txt（后备主体）任一滚动都把实际页号同步回来 */
+window.addEventListener('scroll', onScrollAny, {passive:true});
+txtEl().addEventListener('scroll', onScrollAny, {passive:true});
 /* 竖版：左右滑翻页（内容跟随手指方向：右滑露出下一页、左滑回上一页）；
    滑动后 350ms 内的合成 click 不再当作点按处理 */
 var tsX = 0, tsY = 0, swipeAt = 0;
