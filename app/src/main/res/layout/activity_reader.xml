@@ -114,6 +114,147 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- v1.16.0 点句面板：点任意一句后出现——写笔记＋三色标记（浅黄/浅绿/浅蓝）。
+         默认收起一行（句预览＋笔记钮＋色点＋关闭）；点笔记钮展开输入区。 -->
+    <LinearLayout
+        android:id="@+id/sentPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#EFE9DC"
+        android:orientation="vertical"
+        android:paddingLeft="12dp"
+        android:paddingTop="8dp"
+        android:paddingRight="12dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/sentPanelText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#4A4234"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnSentNote"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingLeft="10dp"
+                android:paddingTop="4dp"
+                android:paddingRight="10dp"
+                android:paddingBottom="4dp"
+                android:text="✎ 笔记"
+                android:textColor="#9E3B2B"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnMark1"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_marginLeft="4dp"
+                android:background="#F5DE8C"
+                android:gravity="center"
+                android:text=""
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnMark2"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_marginLeft="6dp"
+                android:background="#A9D3AC"
+                android:gravity="center"
+                android:text=""
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnMark3"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_marginLeft="6dp"
+                android:background="#A9C8E8"
+                android:gravity="center"
+                android:text=""
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/btnSentClose"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingLeft="12dp"
+                android:paddingTop="4dp"
+                android:paddingRight="4dp"
+                android:paddingBottom="4dp"
+                android:text="✕"
+                android:textColor="#8A8174"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/sentNoteEditRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <EditText
+                android:id="@+id/sentNoteEdit"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#FFFDF7"
+                android:gravity="top"
+                android:hint="写下这一句的笔记……"
+                android:inputType="textMultiLine"
+                android:maxLines="4"
+                android:minLines="2"
+                android:padding="8dp"
+                android:textColor="#26221C"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/btnSentNoteCancel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingLeft="12dp"
+                    android:paddingTop="6dp"
+                    android:paddingRight="12dp"
+                    android:paddingBottom="2dp"
+                    android:text="取消"
+                    android:textColor="#8A8174"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btnSentNoteSave"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingLeft="12dp"
+                    android:paddingTop="6dp"
+                    android:paddingRight="4dp"
+                    android:paddingBottom="2dp"
+                    android:text="保存"
+                    android:textColor="#9E3B2B"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
     <!-- 底部小播放栏（沉浸模式整条隐藏） -->
     <LinearLayout
         android:id="@+id/readerBottomBar"
@@ -233,6 +374,19 @@
                 android:textColor="#F0CDA0"
                 android:textSize="13sp"
                 android:visibility="gone" />
+
+            <!-- v1.16.0 识读开关：用户领读、App 听读纠错（开＝朱砂实心 pill，同跟读口径） -->
+            <TextView
+                android:id="@+id/btnRRecite"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingLeft="12dp"
+                android:paddingTop="6dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="6dp"
+                android:text="识读 关"
+                android:textColor="#DDD6CB"
+                android:textSize="13sp" />
 
             <!-- v1.9.0 注释开关：与跟读并列，呈现口径一致（开＝朱砂实心 pill） -->
             <TextView

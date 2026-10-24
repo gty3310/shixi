@@ -13,6 +13,13 @@ body.fs1 .txt{font-size:21px}
 body.fs2 .txt{font-size:25px}
 body.fs3 .txt{font-size:30px}
 ruby rt{font-size:.40em;color:#9a8f7d;}
+/* 识读（v1.16.0）：读错的字，其拼音标红（只红拼音、不动字形与句高亮） */
+ruby.rerr rt{color:#B03A2A;font-weight:700;}
+/* 点句标记（v1.16.0）：浅黄/浅绿/浅蓝三色底纹。规则写在 .s.cur 之前——
+   当前句的朱砂高亮要盖过标记色，人离开这句标记色自然回来，不会看混 */
+.s.mk1{background:rgba(245,222,140,.38);}
+.s.mk2{background:rgba(169,211,172,.34);}
+.s.mk3{background:rgba(169,200,232,.32);}
 body.nopy rt{display:none}
 body.nopy .txt{line-height:1.95}
 section.ch h2{font-size:1.02em;line-height:1.5;color:#9E3B2B;margin:1.1em 0 .45em;font-weight:700;letter-spacing:.04em;}
@@ -448,6 +455,59 @@ window.__vertState = function(){
           sPage0: V.sPage0, ds: V.ds, pgCur: pgCur, pgTotal: pgTotal};
 };
 window.__vertCalibrate = function(){ V.ok = false; V.failKey = ''; ensureCalibrated(function(){}); };
+/* ===== 识读标红＋点句标记（v1.16.0）=====
+   reciteErrs: flat → 读错字在句内的汉字序号集合（原生侧 ReciteSession 下发）；
+   sentMarks: flat → 标记色 1 浅黄 / 2 浅绿 / 3 浅蓝（原生侧 NotesStore 下发）。
+   两者都是「重渲染后重放」口径：render 分批建 DOM、markCur 拆/合小句都会重建
+   句子内部节点，class 会被冲掉，故 render 完成与 markCur 结尾都调 paintAll 重放。 */
+var reciteErrs = {};
+var sentMarks = {};
+function setReciteErr(i, ci){
+  if (!reciteErrs[i]) reciteErrs[i] = {};
+  reciteErrs[i][ci] = true;
+  paintSent(i);
+}
+function clearReciteErrs(){
+  reciteErrs = {};
+  document.querySelectorAll('ruby.rerr').forEach(function(r){ r.classList.remove('rerr'); });
+}
+function setMarks(m){
+  sentMarks = m || {};
+  paintAllRecite();
+}
+function setMark(i, mk){
+  if (mk) sentMarks[i] = mk; else delete sentMarks[i];
+  paintSent(i);
+}
+function paintSent(i){
+  var el = document.getElementById('si' + i);
+  if (!el) return;
+  el.classList.remove('mk1', 'mk2', 'mk3');
+  var mk = sentMarks[i];
+  if (mk) el.classList.add('mk' + mk);
+  var errs = reciteErrs[i];
+  if (!errs) return;
+  /* 按文档顺序走后代节点：每个 ruby 是一个汉字位；裸文本里的汉字也占位
+     （无拼音的字没有 ruby 可红，跳过计数但不标） */
+  var counter = 0;
+  (function walk(node){
+    for (var k = 0; k < node.childNodes.length; k++){
+      var ch = node.childNodes[k];
+      if (ch.nodeType === 1 && ch.tagName === 'RUBY'){
+        if (errs[counter]) ch.classList.add('rerr');
+        counter++;
+      } else if (ch.nodeType === 3){
+        for (const c of ch.textContent) if (isCJK(c)) counter++;
+      } else if (ch.nodeType === 1){
+        walk(ch);
+      }
+    }
+  })(el);
+}
+function paintAllRecite(){
+  for (var i in reciteErrs) paintSent(parseInt(i, 10));
+  for (var j in sentMarks) paintSent(parseInt(j, 10));
+}
 function markCur(i, scroll){
   if (cur >= 0){
     if (splitEl && splitIdx === cur) unsplit();
@@ -465,6 +525,7 @@ function markCur(i, scroll){
     }
   }
   markNote(i);
+  paintAllRecite();
 }
 function setCur(i, scroll){ markCur(i, scroll); }
 /* ===== 小句级高亮（v1.8.2）=====
@@ -543,11 +604,12 @@ function splitSentence(el, s){
 }
 function setFollowMode(on){
   followMode = !!on;
-  if (followMode){ unsplit(); return; }
+  if (followMode){ unsplit(); paintAllRecite(); return; }
   if (cur >= 0 && splitIdx !== cur){
     var el = document.getElementById('si' + cur);
     if (el) splitSentence(el, flat[cur]);
   }
+  paintAllRecite();
 }
 /* 跟读 gap 标记（v1.4.3）：只改当前句的呈现，不动高亮位置与翻页跟随 */
 function setGap(on){
@@ -589,6 +651,7 @@ function render(){
       Bridge.finishRead();
     });
     if (cur >= 0) markCur(cur, false);
+    paintAllRecite();
     repaginate();
   }
   if (i < parts.length) setTimeout(step, 0); else step();

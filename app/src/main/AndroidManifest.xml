@@ -14,9 +14,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- v1.10.0 悬浮播放控件：在其他应用上层显示半圆钮/字幕卡（需用户在系统设置里授权一次） -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- v1.16.0 识读：麦克风采集（端侧识别，不联网上传音频） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:allowBackup="true"
+        android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:label="时习"
         android:theme="@style/Theme.Songdu">

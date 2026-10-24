@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>复习</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    background: #F8F5EF; color: #26221C;
+    padding: 10px 16px 30px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .topbar { padding: 6px 4px 4px; display:flex; align-items:baseline; gap:10px; }
+  .topbar .t { font-size: 21px; font-weight: 600; letter-spacing:.12em; }
+  .topbar .s { font-size: 11.5px; color: #9A8F7A; }
+
+  .sec-title { display:flex; align-items:baseline; gap:8px; margin: 16px 2px 10px; }
+  .sec-title .h { font-size: 15px; font-weight: 600; letter-spacing:.08em; }
+  .sec-title .d { font-size: 11px; color: #9A8F7A; }
+  .sec-title .bar { width: 4px; height: 14px; border-radius: 2px; background: #9E3B2B; align-self:center; }
+
+  .empty { font-size: 13px; color: #9A8F7A; line-height: 1.9; padding: 6px 4px 2px; }
+
+  .chip {
+    font-size: 9.5px; color: #8A6D1F; background: rgba(169,124,44,.13);
+    border: 1px solid rgba(169,124,44,.30); border-radius: 999px; padding: 1px 6px; white-space: nowrap;
+  }
+
+  /* 三级折叠：书 → 字 → 句子（与定稿 mockup 同一样式） */
+  .booksec { margin-bottom: 14px; }
+  .bookhead { display:flex; align-items:center; gap:9px; padding: 4px 2px 8px; }
+  .bookhead .bname {
+    font-size: 16.5px; font-weight: 600; letter-spacing:.05em;
+    font-family: "Songti SC","Noto Serif CJK SC",serif;
+  }
+  .bookhead .barrow { color: #A2977F; font-size: 11px; margin-left: auto; }
+  .bookhead .bfold { margin-left: auto; font-size: 10.5px; color: #B0A58D; }
+  .bookhead .bfold + .barrow { margin-left: 6px; }
+
+  .wgroup {
+    background: #FFFDF7; border: 1px solid #E7DFC9; border-radius: 14px;
+    margin-bottom: 10px; position: relative;
+  }
+  .wgroup .ghead { display:flex; align-items:center; gap:9px; padding: 10px 13px; }
+  .wgroup .gchar {
+    font-size: 21px; line-height: 1; font-family: "Songti SC","Noto Serif CJK SC",serif;
+  }
+  .wgroup .gfold { margin-left: auto; font-size: 10.5px; color: #B0A58D; }
+  .wgroup .garrow { color: #A2977F; font-size: 11px; margin-left: auto; }
+  .wgroup .gfold + .garrow { margin-left: 6px; }
+  .wgroup .rows { border-top: 1px solid #F0E9D6; }
+  .srow {
+    display: flex; align-items: flex-end; gap: 8px;
+    padding: 15px 13px 8px; border-top: 1px solid #F6F1E1;
+  }
+  .srow:first-child { border-top: none; }
+  .srow .clause {
+    font-family: "Songti SC","Noto Serif CJK SC",serif;
+    font-size: 15.5px; line-height: 1.3; color: #33302A;
+  }
+  .srow .cnt { margin-left: auto; font-size: 10.5px; color: #A2977F; white-space: nowrap; padding-bottom: 2px; }
+  .moreless {
+    padding: 9px 13px; font-size: 11.5px; color: #A2977F; border-top: 1px solid #F6F1E1;
+  }
+  .w {
+    position: relative; font-size: 17px; color: #B03A2A; font-weight: 600;
+    border-bottom: 2px solid rgba(176,58,42,.55); padding-bottom: 1px;
+  }
+  .w .py {
+    position: absolute; left: 50%; transform: translateX(-50%); top: -13px;
+    font-size: 11px; font-weight: 400; line-height: 1; color: #B03A2A;
+    font-family: "PingFang SC","Noto Sans CJK SC",sans-serif; letter-spacing: .02em; white-space: nowrap;
+  }
+  .lpbar {
+    position: absolute; right: 12px; top: 40px; z-index: 5; display: none;
+    background: #37332B; border-radius: 9px; overflow: hidden;
+    box-shadow: 0 8px 18px rgba(50,40,20,.30);
+  }
+  .lpbar.show { display: flex; }
+  .lpbar span { font-size: 12px; padding: 7px 14px; color: #F3EDDD; letter-spacing: .08em; }
+  .lpbar span.del { color: #FFA48F; }
+  .lpbar span + span { border-left: 1px solid rgba(255,255,255,.16); }
+
+  /* 我的笔记 */
+  .note {
+    background: #FFFDF7; border: 1px solid #E7DFC9; border-radius: 14px;
+    padding: 11px 13px 10px 16px; margin-bottom: 10px; position: relative; overflow: hidden;
+  }
+  .note::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+    background: var(--mc, #EFE3B0);
+  }
+  .note .sent {
+    font-family: "Songti SC","Noto Serif CJK SC",serif;
+    font-size: 14.5px; line-height: 1.6; color: #33302A;
+    border-radius: 7px; padding: 4px 8px; margin: 0 -2px;
+    background: var(--mw, rgba(245,222,140,.35));
+  }
+  .note .body { margin-top: 7px; font-size: 13px; line-height: 1.65; color: #55503F; }
+  .note .meta { margin-top: 7px; font-size: 11px; color: #A2977F; display:flex; justify-content:space-between; }
+  .note .meta .tag { color:#8A8172; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="t">复习</div>
+  <div class="s">读不熟的字 · 我的笔记，都在这里回看</div>
+</div>
+
+<div id="root"></div>
+
+<script>
+var DATA = __REVIEW_JSON__;
+var MARK_BAR = {1:'#EBD98A', 2:'#A9D3AC', 3:'#A9C8E8'};
+var MARK_BG = {1:'rgba(245,222,140,.38)', 2:'rgba(169,211,172,.34)', 3:'rgba(169,200,232,.32)'};
+var ROWS_CAP = 5;
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function isCJK(c){
+  var n = c.codePointAt(0);
+  return (n >= 0x4E00 && n <= 0x9FFF) || (n >= 0x3400 && n <= 0x4DBF) ||
+         (n >= 0x20000 && n <= 0x323AF);
+}
+/* 小句 HTML：posInClause（汉字计数）处的字标红＋上方拼音 */
+function clauseHTML(row){
+  var out = '', ci = 0;
+  for (const c of row.clauseText){
+    if (isCJK(c)){
+      if (ci === row.posInClause){
+        out += '<span class="w"><span class="py">' + esc(row.pyToned) + '</span>' + esc(c) + '</span>';
+      } else {
+        out += esc(c);
+      }
+      ci++;
+    } else {
+      out += esc(c);
+    }
+  }
+  return out;
+}
+
+var foldBook = {};   // bookId → true 收起
+var foldChar = {};   // bookId|hanzi → true 收起
+var rowsFull = {};   // bookId|hanzi → true 展开全部句子
+var lpKey = null;    // 当前显示长按小条的字组键
+var lpFired = false;
+
+function render(){
+  var h = '';
+  /* ===== 不熟练的字 ===== */
+  h += '<div class="sec-title"><div class="bar"></div><div class="h">不熟练的字</div>' +
+       '<div class="d">来自识读纠错 · 按经典、按字分组 · 点句跳回原处</div></div>';
+  if (!DATA.books || !DATA.books.length){
+    h += '<div class="empty">还没有识读记录。在阅读页打开「识读」，出声领读，读错的字会记到这里。</div>';
+  }
+  (DATA.books || []).forEach(function(b){
+    var bFold = !!foldBook[b.bookId];
+    h += '<div class="booksec"><div class="bookhead" data-book="' + esc(b.bookId) + '">' +
+         '<div class="bname">' + esc(b.title) + '</div>' +
+         '<div class="chip">共错 ' + b.total + ' 次</div>' +
+         (bFold ? '<div class="bfold">' + b.chars.length + ' 个字 · 已收起</div>' : '') +
+         '<div class="barrow">' + (bFold ? '▸' : '▾') + '</div></div>';
+    if (!bFold){
+      b.chars.forEach(function(g){
+        var key = b.bookId + '|' + g.hanzi;
+        var gFold = !!foldChar[key];
+        var full = !!rowsFull[key];
+        var rows = full ? g.rows : g.rows.slice(0, ROWS_CAP);
+        h += '<div class="wgroup"><div class="ghead" data-book="' + esc(b.bookId) +
+             '" data-char="' + esc(g.hanzi) + '">' +
+             '<div class="gchar">' + esc(g.hanzi) + '</div>' +
+             '<div class="chip">错 ' + g.total + ' 次</div>' +
+             (gFold ? '<div class="gfold">共 ' + g.rows.length + ' 条 · 已收起</div>' : '') +
+             '<div class="garrow">' + (gFold ? '▸' : '▾') + '</div></div>' +
+             '<div class="lpbar' + (lpKey === key ? ' show' : '') + '" data-lp="' + esc(key) + '">' +
+             '<span class="del">删除</span><span class="close">关闭</span></div>';
+        if (!gFold){
+          h += '<div class="rows">';
+          rows.forEach(function(r){
+            h += '<div class="srow" data-book="' + esc(b.bookId) + '" data-sent="' + esc(r.sentId) + '">' +
+                 '<div class="clause">' + clauseHTML(r) + '</div>' +
+                 (r.count > 1 ? '<div class="cnt">错 ' + r.count + ' 次</div>' : '') +
+                 '</div>';
+          });
+          if (!full && g.rows.length > ROWS_CAP){
+            h += '<div class="moreless" data-more="' + esc(key) + '">共 ' + g.rows.length +
+                 ' 条 · 展开全部 ▾</div>';
+          }
+          if (full && g.rows.length > ROWS_CAP){
+            h += '<div class="moreless" data-less="' + esc(key) + '">收起 ▴</div>';
+          }
+          h += '</div>';
+        }
+        h += '</div>';
+      });
+    }
+    h += '</div>';
+  });
+
+  /* ===== 我的笔记 ===== */
+  h += '<div class="sec-title"><div class="bar"></div><div class="h">我的笔记</div>' +
+       '<div class="d">读书时点句记下 · 存本地 · 点一条跳回原句</div></div>';
+  if (!DATA.notes || !DATA.notes.length){
+    h += '<div class="empty">还没有笔记。读书时点任意一句，就能写笔记、打标记。</div>';
+  }
+  (DATA.notes || []).forEach(function(n){
+    var style = n.mark ? ' style="--mc:' + MARK_BAR[n.mark] + '; --mw:' + MARK_BG[n.mark] + ';"' : '';
+    h += '<div class="note"' + style + ' data-book="' + esc(n.bookId) + '" data-sent="' + esc(n.sentId) + '">' +
+         '<div class="sent"' + (n.mark ? '' : ' style="background:rgba(0,0,0,.03);"') + '>' +
+         esc(n.sentText) + '</div>' +
+         (n.note ? '<div class="body">' + esc(n.note) + '</div>' : '') +
+         '<div class="meta"><span>' + esc(n.src) + '</span><span class="tag">' +
+         esc(n.markName ? (n.markName + ' · ') : '') + esc(n.dateStr) + '</span></div></div>';
+  });
+
+  document.getElementById('root').innerHTML = h;
+  bind();
+}
+
+function bind(){
+  document.querySelectorAll('.bookhead').forEach(function(el){
+    el.addEventListener('click', function(){
+      var b = el.getAttribute('data-book');
+      foldBook[b] = !foldBook[b];
+      lpKey = null;
+      render();
+    });
+  });
+  document.querySelectorAll('.ghead').forEach(function(el){
+    var key = el.getAttribute('data-book') + '|' + el.getAttribute('data-char');
+    var timer = null;
+    el.addEventListener('touchstart', function(){
+      lpFired = false;
+      timer = setTimeout(function(){
+        lpFired = true;
+        lpKey = (lpKey === key) ? null : key;
+        render();
+      }, 550);
+    }, {passive:true});
+    el.addEventListener('touchend', function(){ if (timer) clearTimeout(timer); });
+    el.addEventListener('touchmove', function(){ if (timer) clearTimeout(timer); }, {passive:true});
+    el.addEventListener('click', function(){
+      if (lpFired) { lpFired = false; return; }  // 长按刚触发过，这次 click 不折叠
+      foldChar[key] = !foldChar[key];
+      lpKey = null;
+      render();
+    });
+    el.addEventListener('contextmenu', function(e){
+      e.preventDefault();
+      lpKey = (lpKey === key) ? null : key;
+      render();
+    });
+  });
+  document.querySelectorAll('.lpbar').forEach(function(bar){
+    bar.querySelector('.del').addEventListener('click', function(e){
+      e.stopPropagation();
+      var key = bar.getAttribute('data-lp');
+      var p = key.indexOf('|');
+      lpKey = null;
+      if (window.Bridge && Bridge.delChar) Bridge.delChar(key.substring(0, p), key.substring(p + 1));
+    });
+    bar.querySelector('.close').addEventListener('click', function(e){
+      e.stopPropagation();
+      lpKey = null;
+      render();
+    });
+  });
+  document.querySelectorAll('.srow').forEach(function(el){
+    el.addEventListener('click', function(){
+      if (window.Bridge && Bridge.jump)
+        Bridge.jump(el.getAttribute('data-book'), el.getAttribute('data-sent'));
+    });
+  });
+  document.querySelectorAll('.moreless').forEach(function(el){
+    el.addEventListener('click', function(){
+      var more = el.getAttribute('data-more');
+      var less = el.getAttribute('data-less');
+      if (more) rowsFull[more] = true;
+      if (less) rowsFull[less] = false;
+      render();
+    });
+  });
+  document.querySelectorAll('.note').forEach(function(el){
+    el.addEventListener('click', function(){
+      if (window.Bridge && Bridge.jump)
+        Bridge.jump(el.getAttribute('data-book'), el.getAttribute('data-sent'));
+    });
+  });
+}
+
+render();
+</script>
+</body>
+</html>

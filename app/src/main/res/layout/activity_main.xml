@@ -205,6 +205,14 @@
                     android:orientation="vertical" />
             </LinearLayout>
         </ScrollView>
+
+        <!-- v1.16.0 复习页（底部第三栏）：内容是 assets/review.html 的三级折叠页，
+             数据由 MainActivity 注入（识读统计＋笔记库），与定稿 mockup 同版式 -->
+        <WebView
+            android:id="@+id/pageReview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
     </FrameLayout>
 
     <!-- 播放控制条 -->
@@ -361,7 +369,7 @@
             android:orientation="horizontal" />
     </LinearLayout>
 
-    <!-- 底部页签 -->
+    <!-- 底部三栏（v1.16.0 定稿）：听 / 历史记录 / 复习 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="52dp"
@@ -373,7 +381,7 @@
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:background="#00000000"
-            android:text="▶ 播放"
+            android:text="听"
             android:textSize="15sp" />
 
         <Button
@@ -382,7 +390,16 @@
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:background="#00000000"
-            android:text="▦ 日历记录"
+            android:text="历史记录"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/navReview"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="#00000000"
+            android:text="复习"
             android:textSize="15sp" />
     </LinearLayout>
 </LinearLayout>

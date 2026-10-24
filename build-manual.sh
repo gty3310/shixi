@@ -26,7 +26,7 @@ $BT/aapt2 link -o $B/base.apk -I $AJAR \
   --java $B/gen \
   -A $SRC/assets \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 29 --version-name 1.15.0 \
+  --version-code 30 --version-name 1.16.0-dev \
   $B/compiled.zip
 
 echo "[2.5/6] gen StoreSecrets（书库令牌：只进 build 目录，永不入库）"
@@ -56,6 +56,17 @@ $BT/d8 --min-api 26 --lib $AJAR --output $B/dex $B/classes.jar
 echo "[5/6] package + zipalign"
 cp $B/base.apk $B/unsigned.apk
 (cd $B/dex && zip -q ../unsigned.apk classes.dex)
+# v1.16.0 识读原生库（sherpa-onnx JNI＋onnxruntime，仅 arm64-v8a）：
+# 由 fetch-asr-deps.sh 拉到 asr-libs/（不入 git）；缺了也能构建出包，
+# 但识读功能会在启动时报错——构建日志明确警告，不许静默出残缺包。
+mkdir -p $B/nativelib/lib/arm64-v8a
+if [ -f asr-libs/arm64-v8a/libsherpa-onnx-jni.so ] && [ -f asr-libs/arm64-v8a/libonnxruntime.so ]; then
+  cp asr-libs/arm64-v8a/libsherpa-onnx-jni.so asr-libs/arm64-v8a/libonnxruntime.so $B/nativelib/lib/arm64-v8a/
+  (cd $B/nativelib && zip -q ../unsigned.apk lib/arm64-v8a/libsherpa-onnx-jni.so lib/arm64-v8a/libonnxruntime.so)
+  echo "    native libs 打入 APK（lib/arm64-v8a/）"
+else
+  echo "    ⚠️ 警告：asr-libs/arm64-v8a/*.so 缺失，本包识读功能不可用！先跑 ./fetch-asr-deps.sh"
+fi
 $BT/zipalign -f -p 4 $B/unsigned.apk $B/aligned.apk
 
 echo "[6/6] sign (debug key)"

@@ -7,3 +7,6 @@ local.properties
 app/src/main/res/raw/*.mp3
 # App 书库令牌（构建时注入；母本在所有者 Google Drive 的项目备份中，绝不入库）
 store_token.txt
+# v1.16.0 识读原生库（sherpa-onnx JNI + onnxruntime，约 27MB）：由 fetch-asr-deps.sh
+# 从官方 release 拉取，不入库；识读模型文件更不入库（App 内按需下载到 files/）
+asr-libs/

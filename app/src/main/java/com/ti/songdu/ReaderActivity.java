@@ -25,6 +25,11 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.ti.songdu.recite.AsrModelStore;
+import com.ti.songdu.recite.ReciteData;
+import com.ti.songdu.recite.ReciteSession;
+import com.ti.songdu.recite.ReciteStats;
+
 /**
  * v1.4 阅读页：正文在 WebView 里用本地模板（assets/reader.html）＋内容包 JSON 渲染，
  * 无任何网络请求。渲染口径（已确认的 mockup）：
@@ -51,6 +56,8 @@ import java.util.List;
 public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     public static final String EXTRA_TRACK_ID = "reader_track_id";
+    /** v1.16.0 复习页跳回原句：带内容包句子 id，打开后定位到该句 */
+    public static final String EXTRA_SCROLL_SENT_ID = "reader_scroll_sent_id";
 
     private static final float[] SPEEDS = {0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f};
     private static final String[] SPEED_LABELS = {"0.75×", "1.0×", "1.25×", "1.5×", "2.0×", "3.0×", "4.0×"};
@@ -70,6 +77,21 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private View topBar, bottomBar;
     private TextView btnRToggle, btnRSpeed, btnRLoop, btnRScript, btnRPinyin, btnROrient, btnFollow;
     private TextView btnRFollow, btnRFont;
+    /** v1.16.0 识读：开关钮、会话、数据（懒构建）与待启动标记（等权限/模型时置位） */
+    private TextView btnRRecite;
+    private boolean reciteOn = false;
+    private boolean recitePending = false;
+    private ReciteSession reciteSession;
+    private ReciteData reciteData;
+    /** v1.16.0 点句面板与跳转定位 */
+    private View sentPanel, sentNoteEditRow;
+    private TextView sentPanelText;
+    private android.widget.EditText sentNoteEdit;
+    private TextView btnSentNote, btnMark1, btnMark2, btnMark3;
+    private int panelFlat = -1;
+    private int jumpFlat = -1;
+    private int jumpTries = 0;
+
     /** v1.9.0 注释开关钮与竖排固定注栏（注文/页脚/滚动容器） */
     private TextView btnRNotes;
     private View readerNoteBar;
@@ -158,6 +180,15 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRLoop = findViewById(R.id.btnRLoop);
         btnRFollow = findViewById(R.id.btnRFollow);
         btnRFollowChars = findViewById(R.id.btnRFollowChars);
+        btnRRecite = findViewById(R.id.btnRRecite);
+        sentPanel = findViewById(R.id.sentPanel);
+        sentNoteEditRow = findViewById(R.id.sentNoteEditRow);
+        sentPanelText = findViewById(R.id.sentPanelText);
+        sentNoteEdit = findViewById(R.id.sentNoteEdit);
+        btnSentNote = findViewById(R.id.btnSentNote);
+        btnMark1 = findViewById(R.id.btnMark1);
+        btnMark2 = findViewById(R.id.btnMark2);
+        btnMark3 = findViewById(R.id.btnMark3);
         btnRNotes = findViewById(R.id.btnRNotes);
         readerNoteBar = findViewById(R.id.readerNoteBar);
         readerNoteText = findViewById(R.id.readerNoteText);
@@ -186,6 +217,13 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 // 轮询可能早于页面渲染完成：加载完后把当前句高亮补发一次，避免错过
                 if (curSentence >= 0) {
                     web.evaluateJavascript("setCur(" + curSentence + ",false)", null);
+                }
+                // v1.16.0：注入本书的句子标记（render 分批完成时 JS 会再重放一次）
+                pushMarksToWeb();
+                // v1.16.0 复习页跳转：目标句可能在分批渲染的后段，等它出现再定位
+                if (jumpFlat >= 0) {
+                    jumpTries = 0;
+                    handler.postDelayed(jumpAttempt, 350);
                 }
             }
         });
@@ -222,6 +260,33 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                     : "跟读已关闭", Toast.LENGTH_SHORT).show();
         });
         btnRFollowChars.setOnClickListener(v -> showChunkCharsDialog());
+        btnRRecite.setOnClickListener(v -> toggleRecite());
+        findViewById(R.id.btnSentClose).setOnClickListener(v -> hideSentPanel());
+        btnSentNote.setOnClickListener(v -> {
+            if (panelFlat < 0) return;
+            NotesStore.Item it = panelItem();
+            sentNoteEdit.setText(it != null && it.note != null ? it.note : "");
+            sentNoteEditRow.setVisibility(View.VISIBLE);
+            sentNoteEdit.requestFocus();
+        });
+        findViewById(R.id.btnSentNoteCancel).setOnClickListener(v ->
+                sentNoteEditRow.setVisibility(View.GONE));
+        findViewById(R.id.btnSentNoteSave).setOnClickListener(v -> savePanelNote());
+        btnMark1.setOnClickListener(v -> togglePanelMark(NotesStore.MARK_YELLOW));
+        btnMark2.setOnClickListener(v -> togglePanelMark(NotesStore.MARK_GREEN));
+        btnMark3.setOnClickListener(v -> togglePanelMark(NotesStore.MARK_BLUE));
+        // v1.16.0 复习页跳回原句：按句子 id 在本（篇）书里定位
+        String jumpSentId = getIntent().getStringExtra(EXTRA_SCROLL_SENT_ID);
+        if (jumpSentId != null) {
+            for (int i = 0; i < book.flat.size(); i++) {
+                if (jumpSentId.equals(book.flat.get(i).id)) {
+                    jumpFlat = i;
+                    curSentence = i;
+                    break;
+                }
+            }
+        }
+        refreshReciteButton();
         btnRNotes.setOnClickListener(v -> {
             if (notesOn) {
                 // 点关：直接关、不弹窗
@@ -707,6 +772,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             lastGapOn = gapOn;
             web.evaluateJavascript("setGap(" + gapOn + ")", null);
         }
+        // v1.16.0 识读中：当前句由识读会话驱动，播放轮询不再抢高亮
+        if (reciteOn) {
+            refreshNoteBar();
+            return;
+        }
         if (!mine || tStart.length == 0) {
             refreshNoteBar();
             return;
@@ -826,15 +896,291 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 .show();
     }
 
+    // ---------- v1.16.0 识读 ----------
+
+    private final Runnable jumpAttempt = new Runnable() {
+        @Override
+        public void run() {
+            if (jumpFlat < 0 || jumpTries++ > 12) return;
+            web.evaluateJavascript("!!document.getElementById('si" + jumpFlat + "')",
+                    v -> {
+                        if ("true".equals(v)) {
+                            web.evaluateJavascript("setCur(" + jumpFlat + ",true)", null);
+                        } else {
+                            handler.postDelayed(jumpAttempt, 400);
+                        }
+                    });
+        }
+    };
+
+    private ReciteData buildReciteData() {
+        if (reciteData != null) return reciteData;
+        List<ReciteData.SentIn> ins = new ArrayList<>();
+        for (ContentRepo.Sentence s : book.flat) {
+            ReciteData.SentIn in = new ReciteData.SentIn();
+            in.id = s.id;
+            in.textT = s.textT;
+            in.textS = s.textS;
+            in.pinyin = s.pinyin;
+            in.breakPos = s.breakPos;
+            ins.add(in);
+        }
+        reciteData = ReciteData.build(book.bookId, ins);
+        return reciteData;
+    }
+
+    private void toggleRecite() {
+        if (reciteOn) {
+            stopRecite();
+            return;
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            recitePending = true;
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 9021);
+            return;
+        }
+        if (!AsrModelStore.isReady(this)) {
+            askDownloadModel();
+            return;
+        }
+        startRecite();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 9021 && recitePending) {
+            recitePending = false;
+            if (grantResults.length > 0
+                    && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                if (AsrModelStore.isReady(this)) startRecite();
+                else askDownloadModel();
+            } else {
+                Toast.makeText(this, "识读需要麦克风权限", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private void askDownloadModel() {
+        new AlertDialog.Builder(this)
+                .setTitle("识读需要下载识别模型")
+                .setMessage("离线语音识别模型约 25MB，只下一次，之后断网也能用。")
+                .setPositiveButton("下载", (d, w) -> downloadModel())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void downloadModel() {
+        final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
+        pd.setTitle("正在下载识别模型");
+        pd.setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL);
+        pd.setMax(100);
+        pd.setCancelable(false);
+        pd.show();
+        new Thread(() -> AsrModelStore.ensure(this, new AsrModelStore.Callback() {
+            @Override
+            public void onProgress(long done, long total) {
+                runOnUiThread(() -> pd.setProgress(
+                        total > 0 ? (int) (done * 100 / total) : 0));
+            }
+
+            @Override
+            public void onDone() {
+                runOnUiThread(() -> {
+                    pd.dismiss();
+                    startRecite();
+                });
+            }
+
+            @Override
+            public void onError(String message) {
+                runOnUiThread(() -> {
+                    pd.dismiss();
+                    Toast.makeText(ReaderActivity.this,
+                            "模型下载失败：" + message, Toast.LENGTH_LONG).show();
+                });
+            }
+        })).start();
+    }
+
+    private void startRecite() {
+        PlayerService svc = PlayerService.instance;
+        if (svc != null) {
+            if (svc.followEnabled) svc.setFollowEnabled(false);
+            if (svc.playing) svc.pause();
+        }
+        if (reciteSession == null) {
+            reciteSession = new ReciteSession(this, buildReciteData(),
+                    ReciteStats.get(this), new ReciteSession.Listener() {
+                        @Override
+                        public void onDisplaySentence(int flat) {
+                            if (!reciteOn) return;
+                            curSentence = flat;
+                            web.evaluateJavascript("setCur(" + flat + ",true)", null);
+                        }
+
+                        @Override
+                        public void onErrorChar(int flat, int ci) {
+                            if (!reciteOn) return;
+                            web.evaluateJavascript(
+                                    "setReciteErr(" + flat + "," + ci + ")", null);
+                        }
+
+                        @Override
+                        public void onState(boolean running, String error) {
+                            if (!running && error != null) {
+                                reciteOn = false;
+                                refreshReciteButton();
+                                Toast.makeText(ReaderActivity.this,
+                                        "识读已停止：" + error, Toast.LENGTH_LONG).show();
+                            }
+                        }
+                    });
+        }
+        reciteOn = true;
+        reciteSession.start(curSentence >= 0 ? curSentence : 0);
+        refreshReciteButton();
+        Toast.makeText(this, "识读已开启：你领读，我跟着听", Toast.LENGTH_SHORT).show();
+    }
+
+    private void stopRecite() {
+        reciteOn = false;
+        if (reciteSession != null) reciteSession.stop();
+        refreshReciteButton();
+    }
+
+    /** 识读开关钮呈现：与跟读钮同口径（开＝朱砂实心 pill＋白字加粗） */
+    private void refreshReciteButton() {
+        if (btnRRecite == null) return;
+        btnRRecite.setText(reciteOn ? "识读 开" : "识读 关");
+        float density = getResources().getDisplayMetrics().density;
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(999 * density);
+        if (reciteOn) {
+            g.setColor(0xFF9E3B2B);
+            btnRRecite.setTextColor(0xFFFFFFFF);
+            btnRRecite.setTypeface(null, Typeface.BOLD);
+        } else {
+            g.setColor(0x00000000);
+            btnRRecite.setTextColor(0xFFDDD6CB);
+            btnRRecite.setTypeface(null, Typeface.NORMAL);
+        }
+        btnRRecite.setBackground(g);
+    }
+
+    // ---------- v1.16.0 点句面板（笔记＋标记） ----------
+
+    private String chapterIdOf(int flat) {
+        int acc = 0;
+        for (ContentRepo.Chapter ch : book.chapters) {
+            if (flat < acc + ch.sentences.size()) return ch.id;
+            acc += ch.sentences.size();
+        }
+        return "";
+    }
+
+    private NotesStore.Item panelItem() {
+        if (panelFlat < 0 || book.bookId == null) return null;
+        ContentRepo.Sentence s = book.flat.get(panelFlat);
+        return NotesStore.get(this).getItem(book.bookId, s.id);
+    }
+
+    private void showSentPanel(int flat) {
+        if (flat < 0 || flat >= book.flat.size()) return;
+        panelFlat = flat;
+        ContentRepo.Sentence s = book.flat.get(flat);
+        sentPanelText.setText(s.textT != null ? s.textT : s.textS);
+        sentNoteEditRow.setVisibility(View.GONE);
+        refreshPanelMarkButtons();
+        sentPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void hideSentPanel() {
+        panelFlat = -1;
+        sentPanel.setVisibility(View.GONE);
+        sentNoteEditRow.setVisibility(View.GONE);
+    }
+
+    private void refreshPanelMarkButtons() {
+        NotesStore.Item it = panelItem();
+        int mark = it != null ? it.mark : NotesStore.MARK_NONE;
+        btnSentNote.setText(it != null && it.note != null && !it.note.trim().isEmpty()
+                ? "✎ 改笔记" : "✎ 笔记");
+        TextView[] btns = {btnMark1, btnMark2, btnMark3};
+        for (int i = 0; i < btns.length; i++) {
+            boolean on = mark == i + 1;
+            btns[i].setText(on ? "✓" : "");
+            btns[i].setTextColor(0xFF4A4234);
+            btns[i].setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
+            btns[i].setAlpha(on ? 1f : 0.55f);
+        }
+    }
+
+    private void togglePanelMark(int mark) {
+        if (panelFlat < 0 || book.bookId == null) return;
+        ContentRepo.Sentence s = book.flat.get(panelFlat);
+        NotesStore.Item it = panelItem();
+        int cur = it != null ? it.mark : NotesStore.MARK_NONE;
+        int next = cur == mark ? NotesStore.MARK_NONE : mark;
+        NotesStore.get(this).upsert(book.bookId, chapterIdOf(panelFlat), s.id, panelFlat,
+                s.textT != null ? s.textT : s.textS, next,
+                it != null && it.note != null ? it.note : "");
+        web.evaluateJavascript("setMark(" + panelFlat + "," + next + ")", null);
+        refreshPanelMarkButtons();
+    }
+
+    private void savePanelNote() {
+        if (panelFlat < 0 || book.bookId == null) return;
+        ContentRepo.Sentence s = book.flat.get(panelFlat);
+        NotesStore.Item it = panelItem();
+        String text = sentNoteEdit.getText().toString();
+        NotesStore.get(this).upsert(book.bookId, chapterIdOf(panelFlat), s.id, panelFlat,
+                s.textT != null ? s.textT : s.textS,
+                it != null ? it.mark : NotesStore.MARK_NONE, text);
+        sentNoteEditRow.setVisibility(View.GONE);
+        refreshPanelMarkButtons();
+        Toast.makeText(this, "已保存到「复习 · 我的笔记」", Toast.LENGTH_SHORT).show();
+    }
+
+    /** 本书的标记注入阅读页（sentId → flat 换算后按 flat 下发） */
+    private void pushMarksToWeb() {
+        if (book.bookId == null) return;
+        java.util.Map<String, Integer> bySent = NotesStore.get(this).marksForBook(book.bookId);
+        if (bySent.isEmpty()) {
+            web.evaluateJavascript("setMarks({})", null);
+            return;
+        }
+        StringBuilder sb = new StringBuilder("setMarks({");
+        boolean first = true;
+        for (int i = 0; i < book.flat.size(); i++) {
+            Integer m = bySent.get(book.flat.get(i).id);
+            if (m == null) continue;
+            if (!first) sb.append(',');
+            first = false;
+            sb.append(i).append(':').append(m);
+        }
+        sb.append("})");
+        web.evaluateJavascript(sb.toString(), null);
+    }
+
     // ---------- JS 桥 ----------
     public class Bridge {
         @JavascriptInterface
         public void sentence(int flatIdx) {
             runOnUiThread(() -> {
-                if (flatIdx >= 0 && flatIdx < book.flat.size()
-                        && !book.flat.get(flatIdx).noAudio) {
+                if (flatIdx < 0 || flatIdx >= book.flat.size()) return;
+                // v1.16.0 点句：识读中点句＝把识读起点挪到该句；否则照旧从该句起读。
+                // 两种情况都打开点句面板（写笔记/打标记）。
+                if (reciteOn && reciteSession != null) {
+                    reciteSession.startAtSentence(flatIdx);
+                    curSentence = flatIdx;
+                    web.evaluateJavascript("setCur(" + flatIdx + ",true)", null);
+                } else if (!book.flat.get(flatIdx).noAudio) {
                     playAtSentence(flatIdx);
                 }
+                showSentPanel(flatIdx);
             });
         }
 
@@ -937,5 +1283,16 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         handler.removeCallbacks(poll);
         if (PlayerService.listener == this) PlayerService.listener = null;
         super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        // 识读会话持有麦克风与识别器，页面销毁必须停干净
+        if (reciteSession != null) {
+            reciteOn = false;
+            reciteSession.stop();
+            reciteSession = null;
+        }
+        super.onDestroy();
     }
 }

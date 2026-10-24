@@ -37,7 +37,12 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.io.InputStream;
+
+import com.ti.songdu.recite.ReciteStats;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -76,6 +81,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private View pagePlay;
     private ScrollView pageCalendar;
     private Button navPlay, navCal;
+    /** v1.16.0 底部三栏：复习页（WebView）与当前页下标（0 听 / 1 历史记录 / 2 复习） */
+    private android.webkit.WebView pageReview;
+    private Button navReview;
+    private int curPage = 0;
     private final List<TextView> speedChips = new ArrayList<>();
     private final Map<String, View> cardViews = new HashMap<>();
     /** v1.5 分组：已展开的组名集合（持久化在 SharedPreferences；不在集合里＝折叠，默认折叠） */
@@ -135,6 +144,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         pageCalendar = findViewById(R.id.pageCalendar);
         navPlay = findViewById(R.id.navPlay);
         navCal = findViewById(R.id.navCal);
+        pageReview = findViewById(R.id.pageReview);
+        navReview = findViewById(R.id.navReview);
+        pageReview.getSettings().setJavaScriptEnabled(true);
+        pageReview.addJavascriptInterface(new ReviewBridge(), "Bridge");
 
         expandedGroups.addAll(getSharedPreferences("ui_prefs", MODE_PRIVATE)
                 .getStringSet("expandedGroups", new HashSet<>()));
@@ -219,8 +232,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 sendService(PlayerService.ACTION_TOGGLE, null);
             }
         });
-        navPlay.setOnClickListener(v -> showPage(false));
-        navCal.setOnClickListener(v -> showPage(true));
+        navPlay.setOnClickListener(v -> showPage(0));
+        navCal.setOnClickListener(v -> showPage(1));
+        navReview.setOnClickListener(v -> showPage(2));
 
         // Android 13+ 通知权限（前台服务媒体通知需要）
         if (Build.VERSION.SDK_INT >= 33
@@ -229,7 +243,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 42);
         }
 
-        showPage(false);
+        showPage(0);
         refreshAll();
 
         // v1.11.0 悬浮字幕冷启动口径（状态在 overlay_prefs，与设置页/播放器钮同一份）：
@@ -1554,16 +1568,203 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         }
     }
 
-    // ---------- 页面切换 ----------
-    private void showPage(boolean calendar) {
-        showingCalendar = calendar;
-        pagePlay.setVisibility(calendar ? View.GONE : View.VISIBLE);
-        pageCalendar.setVisibility(calendar ? View.VISIBLE : View.GONE);
-        navPlay.setTextColor(getColor(calendar ? R.color.muted : R.color.accent));
-        navPlay.setTypeface(null, calendar ? Typeface.NORMAL : Typeface.BOLD);
-        navCal.setTextColor(getColor(calendar ? R.color.accent : R.color.muted));
-        navCal.setTypeface(null, calendar ? Typeface.BOLD : Typeface.NORMAL);
-        if (calendar) buildCalendar();
+    // ---------- 页面切换（v1.16.0 底部三栏：0 听 / 1 历史记录 / 2 复习） ----------
+    private void showPage(int page) {
+        curPage = page;
+        showingCalendar = page == 1;
+        pagePlay.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
+        pageCalendar.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
+        pageReview.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
+        Button[] navs = {navPlay, navCal, navReview};
+        for (int i = 0; i < navs.length; i++) {
+            boolean on = i == page;
+            navs[i].setTextColor(getColor(on ? R.color.accent : R.color.muted));
+            navs[i].setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
+        }
+        if (page == 1) buildCalendar();
+        if (page == 2) loadReviewPage();
+    }
+
+    // ---------- v1.16.0 复习页 ----------
+
+    /** 书名展示：内容包 title 若没带书名号则补上 */
+    private static String bookTitleOf(String raw) {
+        if (raw == null || raw.isEmpty()) return "";
+        return raw.startsWith("《") ? raw : "《" + raw + "》";
+    }
+
+    /** 组装复习页数据：识读统计（书→字→小句行）＋笔记（倒序） */
+    private JSONObject buildReviewJson() {
+        JSONObject root = new JSONObject();
+        try {
+            // —— 不熟练的字 ——
+            Map<String, Map<String, List<ReciteStats.Record>>> byBook = new HashMap<>();
+            for (ReciteStats.Record r : ReciteStats.get(this).allRecords()) {
+                byBook.computeIfAbsent(r.bookId, k -> new HashMap<>())
+                        .computeIfAbsent(r.hanzi, k -> new ArrayList<>())
+                        .add(r);
+            }
+            List<String> bookIds = new ArrayList<>(byBook.keySet());
+            // 书序：大学、中庸、论语在前，其余按最近出错时间倒序
+            Map<String, Long> bookLast = new HashMap<>();
+            for (String bid : bookIds) {
+                long mx = 0;
+                for (List<ReciteStats.Record> rs : byBook.get(bid).values()) {
+                    for (ReciteStats.Record r : rs) mx = Math.max(mx, r.lastTs);
+                }
+                bookLast.put(bid, mx);
+            }
+            List<String> canon = new ArrayList<>();
+            for (String c : new String[]{"daxue", "zhongyong", "lunyu"}) {
+                if (bookIds.contains(c)) canon.add(c);
+            }
+            bookIds.removeAll(canon);
+            bookIds.sort((a, b) -> Long.compare(bookLast.get(b), bookLast.get(a)));
+            canon.addAll(bookIds);
+
+            JSONArray booksArr = new JSONArray();
+            for (String bid : canon) {
+                ContentRepo.Book bk = ContentRepo.load(this, bid);
+                JSONObject bo = new JSONObject();
+                bo.put("bookId", bid);
+                bo.put("title", bookTitleOf(bk != null ? bk.title : bid));
+                Map<String, List<ReciteStats.Record>> byChar = byBook.get(bid);
+                List<String> chars = new ArrayList<>(byChar.keySet());
+                Map<String, Integer> charTotal = new HashMap<>();
+                int bookTotal = 0;
+                for (String hz : chars) {
+                    int t = 0;
+                    for (ReciteStats.Record r : byChar.get(hz)) t += r.count;
+                    charTotal.put(hz, t);
+                    bookTotal += t;
+                }
+                chars.sort((a, b) -> Integer.compare(charTotal.get(b), charTotal.get(a)));
+                bo.put("total", bookTotal);
+                JSONArray charsArr = new JSONArray();
+                for (String hz : chars) {
+                    JSONObject co = new JSONObject();
+                    co.put("hanzi", hz);
+                    co.put("total", charTotal.get(hz));
+                    List<ReciteStats.Record> rs = new ArrayList<>(byChar.get(hz));
+                    rs.sort((a, b) -> Long.compare(b.lastTs, a.lastTs));
+                    JSONArray rowsArr = new JSONArray();
+                    for (ReciteStats.Record r : rs) {
+                        JSONObject ro = new JSONObject();
+                        ro.put("clauseText", r.clauseText);
+                        ro.put("posInClause", Math.max(0, r.ci - r.clauseHanziStart));
+                        ro.put("pyToned", r.pyToned);
+                        ro.put("sentId", r.sentId);
+                        ro.put("count", r.count);
+                        rowsArr.put(ro);
+                    }
+                    co.put("rows", rowsArr);
+                    charsArr.put(co);
+                }
+                bo.put("chars", charsArr);
+                booksArr.put(bo);
+            }
+            root.put("books", booksArr);
+
+            // —— 我的笔记 ——
+            JSONArray notesArr = new JSONArray();
+            java.text.SimpleDateFormat df = new java.text.SimpleDateFormat(
+                    "M月d日", java.util.Locale.CHINA);
+            for (NotesStore.Item it : NotesStore.get(this).allDesc()) {
+                JSONObject no = new JSONObject();
+                no.put("bookId", it.bookId);
+                no.put("sentId", it.sentId);
+                no.put("sentText", it.sentText == null ? "" : it.sentText);
+                no.put("note", it.note == null ? "" : it.note);
+                no.put("mark", it.mark);
+                no.put("markName", it.mark >= 0 && it.mark < NotesStore.MARK_NAMES.length
+                        ? NotesStore.MARK_NAMES[it.mark] : "");
+                ContentRepo.Book bk = ContentRepo.load(this, it.bookId);
+                String src = bookTitleOf(bk != null ? bk.title : it.bookId);
+                if (bk != null && it.chapterId != null && !it.chapterId.isEmpty()) {
+                    for (ContentRepo.Chapter ch : bk.chapters) {
+                        if (it.chapterId.equals(ch.id) && ch.title != null
+                                && !ch.title.isEmpty()) {
+                            src = src + " " + ch.title;
+                            break;
+                        }
+                    }
+                }
+                no.put("src", src);
+                no.put("dateStr", df.format(new java.util.Date(it.updatedAt)));
+                notesArr.put(no);
+            }
+            root.put("notes", notesArr);
+        } catch (Exception ignored) {
+        }
+        return root;
+    }
+
+    private String reviewTemplate;
+
+    private void loadReviewPage() {
+        try {
+            if (reviewTemplate == null) {
+                InputStream in = getAssets().open("review.html");
+                byte[] buf = new byte[in.available()];
+                int off = 0;
+                while (off < buf.length) {
+                    int n = in.read(buf, off, buf.length - off);
+                    if (n < 0) break;
+                    off += n;
+                }
+                in.close();
+                reviewTemplate = new String(buf, 0, off, java.nio.charset.StandardCharsets.UTF_8);
+            }
+            String html = reviewTemplate.replace("__REVIEW_JSON__",
+                    buildReviewJson().toString());
+            pageReview.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 复习页点条目跳回原句：找到该书的曲目打开阅读页并定位到句 */
+    private void jumpToSentence(String bookId, String sentId) {
+        Track target = null;
+        for (Track t : store.tracks) {
+            if (!bookId.equals(ContentRepo.bookIdFor(t))) continue;
+            if (!"lunyu".equals(bookId)) {
+                target = t;
+                break;
+            }
+            // 论语按篇：找含该句的那一篇
+            ContentRepo.Book b = ContentRepo.bookForTrack(this, t);
+            if (b == null) continue;
+            for (ContentRepo.Sentence s : b.flat) {
+                if (sentId.equals(s.id)) {
+                    target = t;
+                    break;
+                }
+            }
+            if (target != null) break;
+        }
+        if (target == null) {
+            Toast.makeText(this, "这本书的音频不在列表里，无法跳回", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(this, ReaderActivity.class);
+        i.putExtra(ReaderActivity.EXTRA_TRACK_ID, target.id);
+        i.putExtra(ReaderActivity.EXTRA_SCROLL_SENT_ID, sentId);
+        startActivity(i);
+    }
+
+    public class ReviewBridge {
+        @android.webkit.JavascriptInterface
+        public void jump(final String bookId, final String sentId) {
+            runOnUiThread(() -> jumpToSentence(bookId, sentId));
+        }
+
+        @android.webkit.JavascriptInterface
+        public void delChar(final String bookId, final String hanzi) {
+            runOnUiThread(() -> {
+                ReciteStats.get(MainActivity.this).deleteBookChar(bookId, hanzi);
+                loadReviewPage();
+            });
+        }
     }
 
     // ---------- 刷新 ----------
