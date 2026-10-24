@@ -5,3 +5,5 @@ local.properties
 *.apk
 # 诵读音频不在仓库中（版权与体积原因），见 README「内容与音频」
 app/src/main/res/raw/*.mp3
+# App 书库令牌（构建时注入；母本在所有者 Google Drive 的项目备份中，绝不入库）
+store_token.txt
