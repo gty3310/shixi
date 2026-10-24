@@ -69,7 +69,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private WebView web;
     private View topBar, bottomBar;
     private TextView btnRToggle, btnRSpeed, btnRLoop, btnRScript, btnRPinyin, btnROrient, btnFollow;
-    private TextView btnRFollow;
+    private TextView btnRFollow, btnRFont;
     /** v1.9.0 注释开关钮与竖排固定注栏（注文/页脚/滚动容器） */
     private TextView btnRNotes;
     private View readerNoteBar;
@@ -240,7 +240,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             // 点开：先弹选版小窗，选定后才开启（取消则保持关闭）
             showNoteVerChooser();
         });
-        findViewById(R.id.btnRFont).setOnClickListener(v -> showFontPanel());
+        btnRFont = findViewById(R.id.btnRFont);
+        btnRFont.setOnClickListener(v -> showFontPanel());
         btnRScript.setOnClickListener(v -> {
             useTrad = !useTrad;
             prefs.edit().putBoolean("trad", useTrad).apply();
@@ -269,6 +270,43 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         refreshFollowButton(fOn);
         refreshNotesButton();
         refreshNoteBar();
+        applyButtonVisibility();
+    }
+
+    /**
+     * v1.11.0 按总设置页的显隐键（reader_prefs show*Btn，默认全显示）设第二排
+     * 按钮 visibility。藏钮只藏入口：功能状态本身照常生效（如默认竖排仍是竖排、
+     * 注释开着仍开着），用户回设置把钮打开即可继续操作。唯一例外是跟读——
+     * 正在跟读时把「跟读」钮藏掉会让用户无处退出，故先退出跟读模式再藏钮
+     * （防困死）。onCreate 与 onResume 各调一次，设置改完回来即生效。
+     */
+    private void applyButtonVisibility() {
+        if (prefs == null) return;
+        btnRScript.setVisibility(prefs.getBoolean("showTradBtn", true)
+                ? View.VISIBLE : View.GONE);
+        btnROrient.setVisibility(prefs.getBoolean("showVertBtn", true)
+                ? View.VISIBLE : View.GONE);
+        btnRPinyin.setVisibility(prefs.getBoolean("showPinyinBtn", true)
+                ? View.VISIBLE : View.GONE);
+        btnRFont.setVisibility(prefs.getBoolean("showFontBtn", true)
+                ? View.VISIBLE : View.GONE);
+        btnRNotes.setVisibility(prefs.getBoolean("showNotesBtn", true)
+                ? View.VISIBLE : View.GONE);
+        boolean showFollow = prefs.getBoolean("showFollowBtn", true);
+        if (!showFollow) {
+            PlayerService svc = PlayerService.instance;
+            boolean fOn = svc != null ? svc.followEnabled
+                    : getSharedPreferences("follow_prefs", MODE_PRIVATE)
+                            .getBoolean("enabled", false);
+            if (fOn) {
+                if (svc != null) svc.setFollowEnabled(false);
+                else getSharedPreferences("follow_prefs", MODE_PRIVATE)
+                        .edit().putBoolean("enabled", false).apply();
+                lastFollowOn = false;
+                refreshFollowButton(false); // 连带藏起字数小钮与说明行
+            }
+        }
+        btnRFollow.setVisibility(showFollow ? View.VISIBLE : View.GONE);
     }
 
     /** v1.9.0 注释开关钮呈现：与跟读钮同口径（开＝朱砂实心 pill＋白字加粗，关＝无底浅字） */
@@ -888,6 +926,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         super.onResume();
         PlayerService.listener = this;
         applyLoop();
+        applyButtonVisibility(); // 设置页可能刚改过显隐，回来即生效
         handler.post(poll);
     }
 

@@ -49,6 +49,18 @@
             android:textSize="14sp" />
 
         <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginRight="8dp"
+            android:background="@drawable/pill_outline"
+            android:paddingLeft="14dp"
+            android:paddingRight="14dp"
+            android:text="设置"
+            android:textColor="@color/ink"
+            android:textSize="14sp" />
+
+        <Button
             android:id="@+id/btnCopy"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
@@ -325,6 +337,20 @@
                 android:text="15秒"
                 android:textColor="#FFFFFF"
                 android:textSize="15sp" />
+
+            <!-- v1.11.0 悬浮字幕钮：名字固定四字，状态靠样式（朱砂填充＝显示中，
+                 灰描边＝已隐藏），点击切换半圆钮显示/隐藏 -->
+            <TextView
+                android:id="@+id/btnOverlaySub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginLeft="14dp"
+                android:paddingLeft="12dp"
+                android:paddingTop="6dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="6dp"
+                android:text="悬浮字幕"
+                android:textSize="12sp" />
         </LinearLayout>
 
         <LinearLayout

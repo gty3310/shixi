@@ -59,6 +59,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
     private TextView tvDate, tvEmpty;
     private TextView nowTitle, nowPos, nowDur, btnBarToggle;
+    /** v1.11.0 播放器栏「悬浮字幕」钮（状态靠样式，见 refreshOverlayBtn） */
+    private TextView btnOverlaySub;
     private SeekBar playerSeek;
     /** 用户正在拖播放条时置真，期间 ticker 的进度刷新不许覆盖拖动位置 */
     private boolean userSeeking = false;
@@ -133,7 +135,12 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         findViewById(R.id.btnAdd).setOnClickListener(v -> showAddBookDialog());
         findViewById(R.id.btnHelp).setOnClickListener(v -> startActivity(
                 new Intent(this, HelpActivity.class)));
+        findViewById(R.id.btnSettings).setOnClickListener(v -> startActivity(
+                new Intent(this, SettingsActivity.class)));
         findViewById(R.id.btnCopy).setOnClickListener(v -> showCopyDialog());
+        btnOverlaySub = findViewById(R.id.btnOverlaySub);
+        btnOverlaySub.setOnClickListener(v -> toggleOverlayWanted());
+        refreshOverlayBtn();
 
         buildSpeedChips();
 
@@ -218,18 +225,63 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         showPage(false);
         refreshAll();
 
-        // v1.10.0 悬浮播放控件（挂在 PlayerService 上）：全新启动（savedInstanceState
-        // 为 null）时清掉上次会话的「已关闭」标记并尝试拉起——用户上次点 ✕ 关掉的，
-        // 这次打开 App 会重新出现；未授悬浮窗权限时只给指引，本次冷启动至多弹一次。
+        // v1.11.0 悬浮字幕冷启动口径（状态在 overlay_prefs，与设置页/播放器钮同一份）：
+        // 「打开软件时自动显示」＝自动 → 把显示意愿置真并拉起服务（手动藏过的这次
+        // 也回来，沿用旧版每次冷启动重新出现的行为）；＝不自动 → 不拉起，用户手动
+        // 点播放器「悬浮字幕」钮或去设置里打开。未授权且意愿为显示时给一次性指引。
         if (savedInstanceState == null) {
-            getSharedPreferences(OverlayController.PREFS, MODE_PRIVATE)
-                    .edit().putBoolean("closed", false).apply();
+            if (OverlayController.autoShow(this)) {
+                OverlayController.setShowWanted(this, true);
+            }
+            if (OverlayController.showWanted(this)) {
+                if (OverlayController.canDraw(this)) {
+                    ensureOverlayService();
+                } else if (!overlayHintShownThisProcess) {
+                    overlayHintShownThisProcess = true;
+                    showOverlayPermissionHint();
+                }
+            }
+        }
+    }
+
+    /** 「悬浮字幕」钮呈现：名字固定四字、不用开/关字样——朱砂填充白字＝显示中，
+     *  灰描边灰字＝已隐藏（与设置页状态钮同一口径，只是底色在深色播放条上） */
+    private void refreshOverlayBtn() {
+        if (btnOverlaySub == null) return;
+        boolean on = OverlayController.showWanted(this);
+        float density = getResources().getDisplayMetrics().density;
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(999 * density);
+        if (on) {
+            g.setColor(getColor(R.color.accent));
+            btnOverlaySub.setTextColor(0xFFFFFFFF);
+            btnOverlaySub.setTypeface(null, android.graphics.Typeface.BOLD);
+        } else {
+            g.setColor(0x00000000);
+            g.setStroke(Math.max(1, (int) density), 0xFF8A8174);
+            btnOverlaySub.setTextColor(0xFFC8C1B4);
+            btnOverlaySub.setTypeface(null, android.graphics.Typeface.NORMAL);
+        }
+        btnOverlaySub.setBackground(g);
+    }
+
+    /** 点「悬浮字幕」钮：翻转显示意愿。显示→拉起服务（无权限走既有指引弹窗，
+     *  其「去授权」回程在 onResume 处理）；隐藏→摘窗，本会话内 REFRESH 路径
+     *  再拉服务时 tryShow 也按意愿为关不挂，不会自己回来 */
+    private void toggleOverlayWanted() {
+        boolean next = !OverlayController.showWanted(this);
+        OverlayController.setShowWanted(this, next);
+        refreshOverlayBtn();
+        if (next) {
             if (OverlayController.canDraw(this)) {
                 ensureOverlayService();
-            } else if (!overlayHintShownThisProcess) {
-                overlayHintShownThisProcess = true;
+            } else {
+                pendingOverlayGrant = false; // 由弹窗的「去授权」置真
                 showOverlayPermissionHint();
             }
+        } else if (PlayerService.instance != null) {
+            startService(new Intent(this, PlayerService.class)
+                    .setAction(PlayerService.ACTION_HIDE_OVERLAY));
         }
     }
 
@@ -249,7 +301,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         new AlertDialog.Builder(this)
                 .setTitle("悬浮播放按钮")
                 .setMessage("时习可以在屏幕侧边留一个半透明的半圆按钮：轻点播放/暂停，"
-                        + "长按展开看正在读的句子，在别的 App 上面也能用。\n\n"
+                        + "长按打开正在读的阅读页，在别的 App 上面也能用。\n\n"
                         + "这需要系统里的「显示在其他应用上层」权限，授权一次即可；"
                         + "不授权也不影响在 App 里正常使用。")
                 .setNegativeButton("下次再说", null)
@@ -1634,6 +1686,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         super.onResume();
         PlayerService.listener = this;
         refreshAll();
+        refreshOverlayBtn(); // 设置页可能刚改过显示意愿，回来同步钮的样式
         // v1.10.0：从系统设置授权页回来——权限已给就立即把悬浮件拉起来，不等下次冷启动
         if (pendingOverlayGrant) {
             pendingOverlayGrant = false;

@@ -32,9 +32,15 @@ import android.view.WindowManager;
  *    触发后本手势作废，不挪位、不再补发轻点。
  *  - 慢拖（按住移动）：挪位置；松手吸附到最近的左/右边缘，侧边与竖直位置
  *    写 overlay_prefs 持久化。慢拖与快滑靠时长区分：超过 300ms 的移动一律是拖。
- * v1.10.0 的「长按展开字幕卡」已整体移除；悬浮件的关闭路径随之统一走播放通知的
- * 「停止」：服务停掉悬浮件随之消失，MainActivity 下次全新启动再拉起（并清掉
- * 历史版本可能留下的 closed 标记，见 MainActivity）。
+ * v1.10.0 的「长按展开字幕卡」已整体移除。
+ * v1.11.0 显示状态模型（overlay_prefs，设置页／主页播放器钮／本类同一份）：
+ *  - showWanted：显示意愿——true 才挂窗，是「悬浮字幕」状态的唯一真源；
+ *    历史版本的 closed 标记在首次读到新模型时一次性迁移（showWanted＝!closed）
+ *    后删除、不再使用。
+ *  - autoShow：打开软件时自动显示（默认 true）。冷启动由 MainActivity 读它决定
+ *    是否把 showWanted 置真并拉起服务；本类不读。
+ *  - alpha：半圆钮不透明度（默认 0.6＝旧写死值 0x99/0xFF，范围 0.25–1.0）；
+ *    attach 时读取、轮询里持续同步，设置页拖动滑杆即时生效。
  *
  * 窗口：TYPE_APPLICATION_OVERLAY + FLAG_NOT_FOCUSABLE（不抢焦点）
  * + FLAG_NOT_TOUCH_MODAL（窗外触摸穿透到下层应用）。
@@ -44,7 +50,12 @@ import android.view.WindowManager;
 public class OverlayController {
 
     public static final String PREFS = "overlay_prefs";
-    private static final String KEY_CLOSED = "closed";
+    private static final String KEY_CLOSED = "closed"; // 历史键：仅供一次性迁移，迁后删除
+    public static final String KEY_SHOW_WANTED = "showWanted";
+    public static final String KEY_AUTO_SHOW = "autoShow";
+    public static final String KEY_ALPHA = "alpha";
+    public static final float DEFAULT_ALPHA = 0.6f;  // ＝旧写死底色 0x99262626 的不透明度
+    public static final float MIN_ALPHA = 0.25f;
     private static final String KEY_SIDE = "side";   // 0=左 1=右（默认右）
     private static final String KEY_Y = "y";         // 窗口顶边 y（px）；-1=未存
 
@@ -66,6 +77,7 @@ public class OverlayController {
 
     // 当前显示状态（轮询比对，只在变化时动 UI）
     private boolean shownPlaying = false;
+    private float shownAlpha = -1f;
 
     // 手势状态（同一时刻只跟踪一只手指，足够）
     private int gestureSeq = 0;
@@ -100,9 +112,51 @@ public class OverlayController {
         ctx = serviceContext;
         wm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
         prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        migrateLegacy(prefs);
         density = ctx.getResources().getDisplayMetrics().density;
         touchSlop = ViewConfiguration.get(ctx).getScaledTouchSlop();
         swipeDistPx = dp(48);
+    }
+
+    // ---------- v1.11.0 显示状态模型（静态口径：设置页/主页与本类共用同一份 prefs） ----------
+
+    /** 一次性迁移：旧 closed 标记 → 新 showWanted（迁完删旧键）；已迁移则什么都不做 */
+    public static void migrateLegacy(SharedPreferences p) {
+        if (!p.contains(KEY_SHOW_WANTED)) {
+            boolean wanted = !p.getBoolean(KEY_CLOSED, false);
+            p.edit().putBoolean(KEY_SHOW_WANTED, wanted).remove(KEY_CLOSED).apply();
+        }
+    }
+
+    public static SharedPreferences prefsOf(Context c) {
+        SharedPreferences p = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        migrateLegacy(p);
+        return p;
+    }
+
+    /** 显示意愿（唯一真源）：默认 true（沿用旧行为——没关过就是要显示的） */
+    public static boolean showWanted(Context c) {
+        return prefsOf(c).getBoolean(KEY_SHOW_WANTED, true);
+    }
+
+    public static void setShowWanted(Context c, boolean wanted) {
+        prefsOf(c).edit().putBoolean(KEY_SHOW_WANTED, wanted).apply();
+    }
+
+    /** 打开软件时自动显示（默认 true＝现行冷启动行为） */
+    public static boolean autoShow(Context c) {
+        return prefsOf(c).getBoolean(KEY_AUTO_SHOW, true);
+    }
+
+    /** 半圆钮不透明度：默认 0.6（旧写死值），钳在 [0.25, 1.0] 保证可见 */
+    public static float alphaOf(Context c) {
+        float a = prefsOf(c).getFloat(KEY_ALPHA, DEFAULT_ALPHA);
+        return Math.max(MIN_ALPHA, Math.min(1f, a));
+    }
+
+    private float alphaPref() {
+        float a = prefs.getFloat(KEY_ALPHA, DEFAULT_ALPHA);
+        return Math.max(MIN_ALPHA, Math.min(1f, a));
     }
 
     private int dp(float v) {
@@ -115,11 +169,11 @@ public class OverlayController {
 
     // ---------- 显示 / 隐藏 ----------
 
-    /** 拉起悬浮件：关闭标记未清或无悬浮窗权限时不显示。
+    /** 拉起悬浮件：显示意愿为关或无悬浮窗权限时不显示。
      *  服务 onCreate 与 ACTION_REFRESH_OVERLAY 都走这里，幂等。 */
     public void tryShow() {
         try {
-            if (prefs.getBoolean(KEY_CLOSED, false)) {
+            if (!prefs.getBoolean(KEY_SHOW_WANTED, true)) {
                 hide();
                 return;
             }
@@ -205,6 +259,8 @@ public class OverlayController {
         dockedLp = makeLp(w, h, x, savedY(h));
         dockedView.setSide(side() == 1);
         dockedView.setPlaying(shownPlaying);
+        shownAlpha = alphaPref();
+        dockedView.setBgAlpha(shownAlpha);
         try {
             wm.addView(dockedView, dockedLp);
             attached = true;
@@ -368,13 +424,19 @@ public class OverlayController {
         }
     }
 
-    /** 500ms 轮询体：仅同步播放/暂停图标，状态没变不动 UI */
+    /** 500ms 轮询体：同步播放/暂停图标与透明度（设置页拖滑杆改 prefs 后 ≤500ms 生效），
+     *  状态没变不动 UI */
     private void refreshIcon() {
         PlayerService svc = PlayerService.instance;
         boolean playingNow = svc != null && svc.playing;
         if (playingNow != shownPlaying) {
             shownPlaying = playingNow;
             if (dockedView != null) dockedView.setPlaying(playingNow);
+        }
+        float a = alphaPref();
+        if (Math.abs(a - shownAlpha) > 0.001f) {
+            shownAlpha = a;
+            if (dockedView != null) dockedView.setBgAlpha(a);
         }
     }
 
@@ -404,6 +466,13 @@ public class OverlayController {
                 playing = p;
                 invalidate();
             }
+        }
+
+        /** 底色不透明度（RGB 固定 0x26 灰，只改 alpha 通道）；图标保持近不透明、始终清楚 */
+        void setBgAlpha(float a) {
+            int ab = Math.round(Math.max(MIN_ALPHA, Math.min(1f, a)) * 255f);
+            bgPaint.setColor((ab << 24) | 0x262626);
+            invalidate();
         }
 
         @Override

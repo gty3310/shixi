@@ -80,6 +80,7 @@ public class PlayerService extends Service {
     public static final String ACTION_SEEK_REL = "com.ti.songdu.SEEK_REL";
     /** v1.10.0：仅要求服务把悬浮播放控件拉起来（MainActivity 打开/授权回来时发），不带播放语义 */
     public static final String ACTION_REFRESH_OVERLAY = "com.ti.songdu.REFRESH_OVERLAY";
+    public static final String ACTION_HIDE_OVERLAY = "com.ti.songdu.HIDE_OVERLAY";
     public static final String EXTRA_TRACK_ID = "track_id";
     public static final String EXTRA_SEEK_POS = "seek_pos";
     public static final String EXTRA_SEEK_DELTA = "seek_delta";
@@ -1239,8 +1240,12 @@ public class PlayerService extends Service {
                     seekRelative(intent.getLongExtra(EXTRA_SEEK_DELTA, 0));
                     break;
                 case ACTION_REFRESH_OVERLAY:
-                    // v1.10.0：只拉悬浮件，不动播放状态
+                    // v1.10.0：只拉悬浮件，不动播放状态（v1.11.0 起内部按 showWanted 判）
                     if (overlay != null) overlay.tryShow();
+                    break;
+                case ACTION_HIDE_OVERLAY:
+                    // v1.11.0：用户在主页/设置里关掉「悬浮字幕」——只摘窗，不动播放状态
+                    if (overlay != null) overlay.hide();
                     break;
                 default:
                     break;
