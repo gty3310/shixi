@@ -15,6 +15,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.WindowManager;
@@ -26,8 +27,10 @@ import java.util.List;
  * 悬浮播放控件（宿主＝PlayerService：服务已是 mediaPlayback 前台服务，
  * 悬浮件挂在它身上不再起第二个服务、不会出现两个通知）。
  *
- * 形态一（DOCK）：贴在屏幕侧边的半圆形小按钮（半透明，圆心压在屏幕边缘外，
- * 只露半圆），上面是播放/暂停图标；默认停右侧。
+ * 形态一（DOCK）：贴在屏幕侧边的半圆形小按钮（v1.15.0 起造型改贴边圆角片：
+ * 朝屏内一侧圆角、贴边一侧平直，整片可见），上部是播放/暂停图标，其下方
+ * 新增字幕钮（琥珀小圆片＋绘制的字幕图标：圆角长方形＋一排圆点，无文字），
+ * 点字幕钮打开悬浮播放卡；默认停右侧。
  * DOCK 手势（v1.10.2 改版，用户定的口径，四者互斥）：
  *  - 轻点（按下抬起、没拖没长按）：切换播放/暂停；没有装载曲目时改为打开主界面。
  *  - 长按（按住不动约 400ms）：打开当前曲目的阅读页；无装载曲目时打开主界面。
@@ -44,9 +47,16 @@ import java.util.List;
  * 绝不改变卡尺寸：文本自动调字号（30sp 起逐级下调、注音按 0.4 比例跟随）
  * 塞进固定框，下限 9sp，到下限仍塞不下时末尾省略号截断；长句换行落点
  * 优先标点处。右下角琥珀色圆底把手拖动改宽高（宽 [160dp, 屏宽 94%]、
- * 高 [76dp, 屏高 40%]）；拖卡身移动；把卡拖到贴近左/右边缘（24dp 内）
- * 松手 → 收回为该侧半圆钮。形态/位置/尺寸存 overlay_prefs 的
+ * 高 [76dp, 屏高 40%]）；拖卡身移动。形态/位置/尺寸存 overlay_prefs 的
  * mode/cardW/cardH/cardX/cardY，下次拉起恢复。
+ * v1.15.0 卡改版（按钮一律只用图标、无文字标注，均小而淡）：把手更小、
+ * 平时约 28% 不透明（全卡最淡）、按住拖动时才变亮；左上角新增关闭钮 ✕，
+ * 点它弹二选一提示（缩小到侧边／关掉，关掉走 showWanted=false 隐藏）；
+ * 右上角新增缩小钮（减号图标），点它收回该侧半圆钮；点卡文字区（角钮、
+ * 把手、左侧播放钮除外）打开阅读页跳到当前句并开始播放。拖拽吸附改严：
+ * 松手不再按位置贴边判定，改速度判定——只有水平速度达到
+ * FLING_DOCK_DP_PER_SEC（1000dp/s）量级把卡甩向一侧才收回半圆钮，
+ * 慢拖到贴边松手停在原地。
  * 卡内容口径：跟读段经 PlayerService.followSegment() 只读接口取段文本；
  * 普通播放按 currentPosition 二分查有时间轴的当前句（句间停顿归前一句，
  * 与 ReaderActivity.findTimedIndex 一致）。拼音对齐镜像 reader.html 的
@@ -93,7 +103,10 @@ public class OverlayController {
     private static final int MODE_DOCK = 0;
     private static final int MODE_CARD = 1;
     private static final int CARD_BG_RGB = 0x23252D; // 卡底色（mockup 同系深灰蓝）
-    private static final int EDGE_SNAP_DP = 24;      // 卡拖到离边 ≤24dp 松手算贴边收起
+    // v1.15.0：吸附改严的速度阈值（dp/s）。慢拖松手时手的速度通常只有几百 px/s
+    // （约一两百 dp/s），用力甩动轻松超过 1500dp/s；1000dp/s 卡在两者之间，
+    // 保证「轻拖慢拖绝不吸附、狠甩必吸附」。
+    private static final float FLING_DOCK_DP_PER_SEC = 1000f;
 
     private static final long LONG_PRESS_MS = 400;
     private static final long SWIPE_MAX_MS = 300;
@@ -125,14 +138,23 @@ public class OverlayController {
     private boolean gDragging = false;
     private boolean gLongFired = false;
     private boolean gSwipeFired = false;
+    private boolean gDownOnCc = false;  // v1.15.0：DOCK 按下点是否落在字幕钮上
     private float gDownRawX, gDownRawY;
     private int gStartX, gStartY;
 
     // 卡手势状态
-    private int cZone;              // 0=卡身 1=播放钮 2=调节把手
+    private int cZone;              // 0=卡身 1=播放钮 2=调节把手 3=关闭钮 4=缩小钮
     private boolean cMoved;
     private float cDownRawX, cDownRawY;
     private int cStartX, cStartY, cStartW, cStartH;
+    private VelocityTracker cVel;   // v1.15.0：松手甩动速度判定
+
+    // v1.15.0：关闭二选一提示窗（自绘 overlay 窗，不用 Dialog——Service 上下文
+    // 无窗口令牌，自绘窗与卡/半圆钮同一套 WindowManager 路径最稳）
+    private ClosePromptView promptView;
+    private boolean promptAttached = false;
+    private int promptSide = 1;         // 弹提示时卡所在侧（「缩小到侧边」用）
+    private int promptCenterY = 0;      // 弹提示时卡的竖直中心
 
     // v1.13.0 卡内容缓存：句轴按曲目缓存，内容键不变不重排版
     private ContentRepo.Book cardBook;
@@ -250,6 +272,7 @@ public class OverlayController {
     public void hide() {
         try {
             ui.removeCallbacks(poll);
+            dismissPrompt();
             detachDocked();
             detachCard();
         } catch (Exception ignored) {
@@ -311,9 +334,10 @@ public class OverlayController {
             dockedView = new HalfButtonView(ctx);
             dockedView.setOnTouchListener(new DragTouch());
         }
-        int r = dp(28);                    // 半径 28dp（整圆 56dp）
-        int w = r + dp(4);                 // 窗宽略大于半径：圆心压出屏幕，只露半圆多一点
-        int h = r * 2;
+        // v1.15.0：贴边圆角片整片可见——宽 36dp、高 92dp（上 play 图标、
+        // 下字幕钮，两段纵排）；高度变了，savedY/clampY 按新高自动跟随
+        int w = dp(36);
+        int h = dp(92);
         Point s = screenSize();
         int x = side() == 1 ? s.x - w : 0;
         dockedLp = makeLp(w, h, x, savedY(h));
@@ -434,7 +458,7 @@ public class OverlayController {
                 .putInt(KEY_MODE, MODE_CARD)
                 .putInt(KEY_CARD_X, x)
                 .putInt(KEY_CARD_Y, y)
-                .putInt(KEY_Y, clampY(cy - dp(28), dp(56)));
+                .putInt(KEY_Y, clampY(cy - dp(46), dp(92)));
         if (!prefs.contains(KEY_CARD_W)) ed.putInt(KEY_CARD_W, w);
         if (!prefs.contains(KEY_CARD_H)) ed.putInt(KEY_CARD_H, h);
         ed.apply();
@@ -443,9 +467,10 @@ public class OverlayController {
         startPoll();
     }
 
-    /** CARD 拖回贴近边缘松手 → 收回为该侧半圆钮（高度跟随卡的竖直中心） */
+    /** CARD 收回为该侧半圆钮（缩小钮／狠甩吸附／关闭提示的「缩小到侧边」共用；
+     *  高度跟随卡的竖直中心，DOCK 高 v1.15.0 起为 92dp） */
     private void collapseToDock(int newSide, int centerY) {
-        int h = dp(56);
+        int h = dp(92);
         prefs.edit()
                 .putInt(KEY_MODE, MODE_DOCK)
                 .putInt(KEY_SIDE, newSide)
@@ -474,6 +499,7 @@ public class OverlayController {
                         gDragging = false;
                         gLongFired = false;
                         gSwipeFired = false;
+                        gDownOnCc = dockedView != null && dockedView.isCcZone(e.getX(), e.getY());
                         gDownRawX = e.getRawX();
                         gDownRawY = e.getRawY();
                         gStartX = lp.x;
@@ -533,9 +559,13 @@ public class OverlayController {
                             if (wasDrag) {
                                 if (!finishDockDrag(v, lp)) snapToEdge(v, lp);
                             } else if (e.getActionMasked() == MotionEvent.ACTION_UP) {
-                                onToggleTap();
+                                // v1.15.0：按下点在字幕钮上且没拖动 → 字幕钮轻点；
+                                // 其余轻点照旧切换播放/暂停
+                                if (gDownOnCc) onSubtitleButtonTap();
+                                else onToggleTap();
                             }
                         }
+                        gDownOnCc = false;
                         return true;
                     }
                     default:
@@ -557,7 +587,7 @@ public class OverlayController {
             if (inward <= s.x / 4) return false;
             int w = v.getWidth();
             int h = v.getHeight();
-            int cx = startSide == 1 ? lp.x + w : lp.x; // 半圆圆心（压在窗的贴边一侧）
+            int cx = lp.x + w / 2; // v1.15.0：圆角片整片可见，中心即片心
             int cy = lp.y + h / 2;
             convertToCard(cx, cy);
             return true;
@@ -583,6 +613,10 @@ public class OverlayController {
     }
 
     // ---------- CARD 手势：拖卡身移动 / 按播放钮 / 拖右下把手改尺寸 ----------
+    // v1.15.0：分区加左上关闭钮（3）与右上缩小钮（4）；未拖动的单击按区分流
+    // （播放钮切换播放、关闭钮弹提示、缩小钮收回、文字区跳阅读页续播）；
+    // 拖动松手改速度判定：VelocityTracker 的水平速度达到阈值且方向朝一侧
+    // → 收回该侧半圆钮；慢拖（含拖到贴边）松手只存位置、停在原地。
 
     private class CardTouch implements View.OnTouchListener {
         @Override
@@ -599,18 +633,28 @@ public class OverlayController {
                         cStartY = lp.y;
                         cStartW = lp.width;
                         cStartH = lp.height;
+                        if (cVel != null) cVel.recycle();
+                        cVel = VelocityTracker.obtain();
+                        cVel.addMovement(e);
                         float lx = e.getX(), ly = e.getY();
                         float bcx = dpF(34), bcy = v.getHeight() / 2f;
-                        if (lx > v.getWidth() - dpF(46) && ly > v.getHeight() - dpF(46)) {
+                        float chx = dpF(15.5f), chy = dpF(15.5f);
+                        if (Math.hypot(lx - chx, ly - chy) <= dpF(17)) {
+                            cZone = 3; // 左上关闭钮
+                        } else if (Math.hypot(lx - (v.getWidth() - chx), ly - chy) <= dpF(17)) {
+                            cZone = 4; // 右上缩小钮
+                        } else if (lx > v.getWidth() - dpF(46) && ly > v.getHeight() - dpF(46)) {
                             cZone = 2; // 右下把手区
+                            if (cardView != null) cardView.setHandleActive(true); // 按住即变亮
                         } else if (Math.hypot(lx - bcx, ly - bcy) <= dpF(28)) {
                             cZone = 1; // 播放/暂停钮
                         } else {
-                            cZone = 0; // 卡身
+                            cZone = 0; // 卡身（文字区）
                         }
                         return true;
                     }
                     case MotionEvent.ACTION_MOVE: {
+                        if (cVel != null) cVel.addMovement(e);
                         float dx = e.getRawX() - cDownRawX;
                         float dy = e.getRawY() - cDownRawY;
                         if (!cMoved && Math.hypot(dx, dy) > touchSlop) cMoved = true;
@@ -633,19 +677,33 @@ public class OverlayController {
                     case MotionEvent.ACTION_UP:
                     case MotionEvent.ACTION_CANCEL: {
                         boolean up = e.getActionMasked() == MotionEvent.ACTION_UP;
-                        if (cZone == 1) {
-                            if (up && !cMoved) onCardButtonTap();
-                        } else if (cZone == 2) {
+                        if (cardView != null) cardView.setHandleActive(false); // 把手恢复暗淡
+                        if (cZone == 2) {
                             persistCard(); // 改完大小松手即存
+                        } else if (up && !cMoved) {
+                            if (cZone == 1) onCardButtonTap();
+                            else if (cZone == 3) onCardCloseTap();
+                            else if (cZone == 4) collapseToDock(cardSide(), lp.y + lp.height / 2);
+                            else onCardTextTap();
                         } else if (cMoved) {
-                            Point s = screenSize();
-                            if (lp.x <= dp(EDGE_SNAP_DP)) {
+                            // 吸附改严：只认松手速度，不认位置
+                            float vx = 0f;
+                            if (cVel != null) {
+                                cVel.computeCurrentVelocity(1000); // px/s
+                                vx = cVel.getXVelocity();
+                            }
+                            float threshold = dpF(FLING_DOCK_DP_PER_SEC);
+                            if (vx <= -threshold) {
                                 collapseToDock(0, lp.y + lp.height / 2);
-                            } else if (lp.x + lp.width >= s.x - dp(EDGE_SNAP_DP)) {
+                            } else if (vx >= threshold) {
                                 collapseToDock(1, lp.y + lp.height / 2);
                             } else {
-                                persistCard();
+                                persistCard(); // 慢拖：停在原地
                             }
+                        }
+                        if (cVel != null) {
+                            cVel.recycle();
+                            cVel = null;
                         }
                         return true;
                     }
@@ -656,6 +714,13 @@ public class OverlayController {
                 return true;
             }
         }
+    }
+
+    /** 卡当前所在侧（按卡心判左右），缩小钮与关闭提示共用 */
+    private int cardSide() {
+        if (cardLp == null) return side();
+        Point s = screenSize();
+        return (cardLp.x + cardLp.width / 2) >= s.x / 2 ? 1 : 0;
     }
 
     // ---------- 播放控制与跳转 ----------
@@ -680,6 +745,83 @@ public class OverlayController {
             if (svc != null && svc.current != null) svc.toggle();
         } catch (Exception ignored) {
         }
+    }
+
+    /** v1.15.0 DOCK 字幕钮轻点：打开悬浮播放卡（位置/尺寸用已存的 cardX/Y/W/H，
+     *  attachCard 内部有默认值兜底）。卡与半圆钮互斥显示，卡开着时本钮不可见；
+     *  万一状态并存，点它收回半圆钮（切换语义兜底）。 */
+    private void onSubtitleButtonTap() {
+        try {
+            if (cardAttached) {
+                collapseToDock(cardSide(),
+                        cardLp != null ? cardLp.y + cardLp.height / 2 : screenSize().y / 2);
+                return;
+            }
+            prefs.edit().putInt(KEY_MODE, MODE_CARD).apply();
+            detachDocked();
+            attachCard();
+            startPoll();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** v1.15.0 CARD 文字区单击：打开阅读页（其 150ms 轮询会按服务当前进度
+     *  自动滚到当前句并高亮），并保证处于播放态——暂停时先 resume() 再跳。
+     *  无曲目时 openReaderPage 自然回退打开主界面。 */
+    private void onCardTextTap() {
+        try {
+            PlayerService svc = PlayerService.instance;
+            if (svc != null && svc.current != null && !svc.playing) svc.resume();
+        } catch (Exception ignored) {
+        }
+        openReaderPage();
+    }
+
+    /** v1.15.0 CARD 关闭钮：弹二选一提示 */
+    private void onCardCloseTap() {
+        showClosePrompt();
+    }
+
+    /** 挂上关闭提示窗：整屏模态窗（不带 FLAG_NOT_TOUCH_MODAL，窗外触摸也归它，
+     *  点面板外即取消）。弹出时的卡侧/卡心先记下，选项动作按弹出时状态执行。 */
+    private void showClosePrompt() {
+        if (promptAttached || cardLp == null) return;
+        try {
+            promptSide = cardSide();
+            promptCenterY = cardLp.y + cardLp.height / 2;
+            if (promptView == null) promptView = new ClosePromptView(ctx);
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.TOP | Gravity.LEFT;
+            lp.x = 0;
+            lp.y = 0;
+            wm.addView(promptView, lp);
+            promptAttached = true;
+        } catch (Exception ignored) {
+            promptAttached = false;
+        }
+    }
+
+    private void dismissPrompt() {
+        if (promptView != null && promptAttached) {
+            try {
+                wm.removeView(promptView);
+            } catch (Exception ignored) {
+            }
+        }
+        promptAttached = false;
+    }
+
+    /** 「关掉」：走既有隐藏路径——showWanted 置假后 hide()；下次打开 App 时
+     *  MainActivity 冷启动按 autoShow 决定是否重新置真显示（原有口径不变） */
+    private void closeOverlayCompletely() {
+        dismissPrompt();
+        setShowWanted(ctx, false);
+        hide();
     }
 
     /** 长按 / 快上滑：打开当前曲目的阅读页（intent 口径同 MainActivity 点条目进
@@ -905,11 +1047,18 @@ public class OverlayController {
         }
     }
 
-    // ---------- 半圆钮视图：整圆圆心压在窗外边缘，只露半圆 ----------
+    // ---------- 半圆钮视图：v1.15.0 起为贴边圆角片（整片可见） ----------
+    // 布局（窗口 36dp×92dp）：上部 play/暂停图标（中心 y=24dp），下方字幕钮
+    // （中心 y=66dp）：琥珀小圆片＋绘制的字幕图标（圆角长方形＋顶部短线＋
+    // 下方一排三个圆点，仿各家播放器的字幕条意象），无文字、无 emoji。
 
     private class HalfButtonView extends View {
         private final Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint fgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ccFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ccRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ccInkPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ccDotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private boolean rightSide = true;
         private boolean playing = false;
 
@@ -917,6 +1066,19 @@ public class OverlayController {
             super(c);
             bgPaint.setColor(0x99262626);  // 半透明深灰（约 60% 不透明）
             fgPaint.setColor(0xF2FFFFFF);
+            ccFillPaint.setStyle(Paint.Style.FILL);
+            ccFillPaint.setColor(0x29F0B35C);   // 琥珀填充约 16%
+            ccRingPaint.setStyle(Paint.Style.STROKE);
+            ccRingPaint.setColor(0x73F0B35C);   // 琥珀描边约 45%
+            ccInkPaint.setStyle(Paint.Style.STROKE);
+            ccInkPaint.setColor(0xF2F0B35C);    // 图标线条：琥珀近不透明
+            ccInkPaint.setStrokeCap(Paint.Cap.ROUND);
+            ccDotPaint.setStyle(Paint.Style.FILL);
+            ccDotPaint.setColor(0xF2F0B35C);
+        }
+
+        private float dpF(float v) {
+            return v * getResources().getDisplayMetrics().density;
         }
 
         void setSide(boolean right) {
@@ -940,18 +1102,26 @@ public class OverlayController {
             invalidate();
         }
 
+        /** 字幕钮命中判定（DOCK 手势在 DOWN 时问）：圆心（宽中心, 66dp）、半径 17dp */
+        boolean isCcZone(float x, float y) {
+            return Math.hypot(x - getWidth() / 2f, y - dpF(66)) <= dpF(17);
+        }
+
         @Override
         protected void onDraw(Canvas canvas) {
             float w = getWidth();
             float h = getHeight();
-            float r = h / 2f;
-            // 右侧停靠：圆心在窗右缘（＝屏幕右缘），露左半圆；左侧停靠镜像
-            float cx = rightSide ? w : 0f;
-            canvas.drawCircle(cx, r, r, bgPaint);
-            // 图标中心取半圆的形心附近（距圆心约 0.45r 向屏内）
-            float ix = rightSide ? w - r * 0.55f : r * 0.55f;
-            float iy = r;
-            float s = r * 0.40f;
+            // 背景：朝屏内一侧圆角、贴边一侧平直——圆角矩形往贴边方向多画
+            // 一个半径的量，超出窗口的部分由窗口边界自然裁平（mockup 口径）
+            float rr = Math.min(w, dpF(24));
+            RectF bg = rightSide
+                    ? new RectF(0, 0, w + rr, h)
+                    : new RectF(-rr, 0, w, h);
+            canvas.drawRoundRect(bg, rr, rr, bgPaint);
+            // play/暂停图标：横向居中，中心 y=24dp
+            float ix = w / 2f;
+            float iy = dpF(24);
+            float s = dpF(11);
             if (playing) {
                 float bw = s * 0.34f;
                 float gap = s * 0.30f;
@@ -965,6 +1135,25 @@ public class OverlayController {
                 tri.close();
                 canvas.drawPath(tri, fgPaint);
             }
+            // 字幕钮：琥珀小圆片（中心 y=66dp，半径 12dp）
+            float cx = w / 2f;
+            float cy = dpF(66);
+            float cr = dpF(12);
+            ccRingPaint.setStrokeWidth(dpF(1));
+            canvas.drawCircle(cx, cy, cr, ccFillPaint);
+            canvas.drawCircle(cx, cy, cr - dpF(0.5f), ccRingPaint);
+            // 字幕图标：圆角长方形（13×9.6dp）＋顶部短线（半透明）＋下方三个圆点
+            float gw = dpF(13), gh = dpF(9.6f);
+            RectF cap = new RectF(cx - gw / 2, cy - gh / 2, cx + gw / 2, cy + gh / 2);
+            ccInkPaint.setStrokeWidth(dpF(1.1f));
+            canvas.drawRoundRect(cap, dpF(2.2f), dpF(2.2f), ccInkPaint);
+            ccInkPaint.setAlpha(128);
+            canvas.drawLine(cx - dpF(4), cy - dpF(1.7f), cx + dpF(4), cy - dpF(1.7f), ccInkPaint);
+            ccInkPaint.setAlpha(242);
+            float dr = dpF(0.95f), dy = cy + dpF(2.2f);
+            canvas.drawCircle(cx - dpF(3.6f), dy, dr, ccDotPaint);
+            canvas.drawCircle(cx, dy, dr, ccDotPaint);
+            canvas.drawCircle(cx + dpF(3.6f), dy, dr, ccDotPaint);
         }
     }
 
@@ -981,6 +1170,10 @@ public class OverlayController {
         private final Paint pyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint handleInk = new Paint(Paint.ANTI_ALIAS_FLAG);
+        // v1.15.0：角钮（左上关闭 ✕ / 右上缩小 −）小圆片底与字形线
+        private final Paint chipPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint chipGlyphPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private boolean handleActive = false;   // 把手被按住拖动中（变亮）
 
         private List<CardUnit> units = new ArrayList<>();
         private List<List<CardUnit>> lines = new ArrayList<>();
@@ -1002,10 +1195,23 @@ public class OverlayController {
             pyPaint.setColor(0xD9FFFFFF);     // 注音略淡但仍清楚
             pyPaint.setTextAlign(Paint.Align.CENTER);
             handlePaint.setStyle(Paint.Style.FILL);
-            handlePaint.setColor(0xFFE8A33D); // 琥珀色圆底（与 mockup 一致，固定不透明）
+            handlePaint.setColor(0xFFE8A33D); // 琥珀色圆底（与 mockup 一致）；透明度在 onDraw 按 handleActive 切（平时约 28%）
             handleInk.setStyle(Paint.Style.STROKE);
             handleInk.setColor(0xFF2E2A26);
             handleInk.setStrokeCap(Paint.Cap.ROUND);
+            chipPaint.setStyle(Paint.Style.FILL);
+            chipPaint.setColor(0x12FFFFFF);   // 角钮底：白约 7%
+            chipGlyphPaint.setStyle(Paint.Style.STROKE);
+            chipGlyphPaint.setColor(0x6BFFFFFF); // 角钮字形：白约 42%
+            chipGlyphPaint.setStrokeCap(Paint.Cap.ROUND);
+        }
+
+        /** v1.15.0：把手亮度切换——平时约 28% 不透明（全卡最淡），按住拖动时全亮 */
+        void setHandleActive(boolean active) {
+            if (handleActive != active) {
+                handleActive = active;
+                invalidate();
+            }
         }
 
         private float dpF(float v) {
@@ -1200,8 +1406,22 @@ public class OverlayController {
                     y += lineH;
                 }
             }
+            // v1.15.0 角钮：左上关闭 ✕、右上缩小 −（绘制字形、无文字；小而淡）
+            float chx = dpF(15.5f), chy = dpF(15.5f), chr = dpF(9.5f);
+            canvas.drawCircle(chx, chy, chr, chipPaint);
+            canvas.drawCircle(w - chx, chy, chr, chipPaint);
+            chipGlyphPaint.setStrokeWidth(dpF(1.3f));
+            float cg = dpF(3.4f);
+            canvas.drawLine(chx - cg, chy - cg, chx + cg, chy + cg, chipGlyphPaint);
+            canvas.drawLine(chx - cg, chy + cg, chx + cg, chy - cg, chipGlyphPaint);
+            float mg = dpF(4f);
+            canvas.drawLine(w - chx - mg, chy, w - chx + mg, chy, chipGlyphPaint);
             // 右下调节把手：琥珀圆底＋深色双向箭头（⤡ 意象，手工线条不依赖字体字形）
-            float hx = w - dpF(15), hy = h - dpF(15), hr = dpF(12.5f);
+            // v1.15.0：半径 12.5→10dp 更小；透明度平时约 28%、按住拖动时 100%
+            int handleAlpha = handleActive ? 255 : 71;
+            handlePaint.setAlpha(handleAlpha);
+            handleInk.setAlpha(handleAlpha);
+            float hx = w - dpF(15), hy = h - dpF(15), hr = dpF(10);
             canvas.drawCircle(hx, hy, hr, handlePaint);
             handleInk.setStrokeWidth(dpF(1.7f));
             float a = dpF(4.6f), wing = dpF(4.4f);
@@ -1210,6 +1430,131 @@ public class OverlayController {
             canvas.drawLine(hx + a, hy + a - wing, hx + a, hy + a, handleInk);
             canvas.drawLine(hx - a + wing, hy - a, hx - a, hy - a, handleInk);
             canvas.drawLine(hx - a, hy - a + wing, hx - a, hy - a, handleInk);
+        }
+    }
+
+    // ---------- v1.15.0 关闭二选一提示窗：整屏自绘（遮罩＋居中面板） ----------
+    // 文案口径照 mockup 定稿：标题「关闭悬浮字幕？」＋一句区别说明＋两个按钮
+    // 「缩小到侧边」（琥珀）／「关掉」（灰白）。点面板外取消。
+
+    private class ClosePromptView extends View {
+        private final Paint scrimPaint = new Paint();
+        private final Paint panelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint panelRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint descPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint shrinkFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint shrinkRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint shrinkTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint closeFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint closeRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint closeTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF panelRect = new RectF();
+        private final RectF shrinkRect = new RectF();
+        private final RectF closeRect = new RectF();
+
+        ClosePromptView(Context c) {
+            super(c);
+            scrimPaint.setColor(0x73000000);            // 遮罩黑约 45%
+            panelPaint.setStyle(Paint.Style.FILL);
+            panelPaint.setColor(0xF722232A);            // 面板底（约 97% 不透明）
+            panelRingPaint.setStyle(Paint.Style.STROKE);
+            panelRingPaint.setColor(0x1FFFFFFF);
+            titlePaint.setColor(0xF2FFFFFF);
+            titlePaint.setTextAlign(Paint.Align.CENTER);
+            titlePaint.setFakeBoldText(true);
+            descPaint.setColor(0xFFA5A2AD);
+            descPaint.setTextAlign(Paint.Align.CENTER);
+            shrinkFillPaint.setStyle(Paint.Style.FILL);
+            shrinkFillPaint.setColor(0x29F0B35C);       // 琥珀填充约 16%
+            shrinkRingPaint.setStyle(Paint.Style.STROKE);
+            shrinkRingPaint.setColor(0x8CF0B35C);       // 琥珀描边约 55%
+            shrinkTextPaint.setColor(0xFFF0B35C);
+            shrinkTextPaint.setTextAlign(Paint.Align.CENTER);
+            closeFillPaint.setStyle(Paint.Style.FILL);
+            closeFillPaint.setColor(0x0FFFFFFF);        // 灰白填充约 6%
+            closeRingPaint.setStyle(Paint.Style.STROKE);
+            closeRingPaint.setColor(0x29FFFFFF);        // 灰白描边约 16%
+            closeTextPaint.setColor(0xFFD8D5DE);
+            closeTextPaint.setTextAlign(Paint.Align.CENTER);
+        }
+
+        private float dpF(float v) {
+            return v * getResources().getDisplayMetrics().density;
+        }
+
+        private float spF(float v) {
+            return v * getResources().getDisplayMetrics().scaledDensity;
+        }
+
+        /** 面板与两按钮的几何（onDraw 与触摸共用）：面板宽 min(300dp, 屏宽-52dp)、
+         *  高 172dp 居中；按钮在面板底部内缩 16dp、高 38dp、间距 10dp */
+        private void layoutRects(int w, int h) {
+            float pw = Math.min(dpF(300), w - dpF(52));
+            float ph = dpF(172);
+            float left = (w - pw) / 2f;
+            float top = (h - ph) / 2f;
+            panelRect.set(left, top, left + pw, top + ph);
+            float btnH = dpF(38);
+            float btnY = top + ph - dpF(16) - btnH;
+            float innerL = left + dpF(16);
+            float innerR = left + pw - dpF(16);
+            float gap = dpF(10);
+            float bw = (innerR - innerL - gap) / 2f;
+            shrinkRect.set(innerL, btnY, innerL + bw, btnY + btnH);
+            closeRect.set(innerL + bw + gap, btnY, innerR, btnY + btnH);
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            int w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            layoutRects(w, h);
+            canvas.drawRect(0, 0, w, h, scrimPaint);
+            float r = dpF(16);
+            canvas.drawRoundRect(panelRect, r, r, panelPaint);
+            panelRingPaint.setStrokeWidth(dpF(1));
+            canvas.drawRoundRect(panelRect, r, r, panelRingPaint);
+            float cx = panelRect.centerX();
+            titlePaint.setTextSize(spF(15));
+            canvas.drawText("关闭悬浮字幕？", cx,
+                    panelRect.top + dpF(18) + spF(15), titlePaint);
+            descPaint.setTextSize(spF(12));
+            float dBase = panelRect.top + dpF(52);
+            canvas.drawText("可以先缩到侧边（半圆钮还在，", cx, dBase, descPaint);
+            canvas.drawText("随时再打开），也可以彻底关掉悬浮窗。", cx, dBase + dpF(20), descPaint);
+            float br = dpF(10);
+            canvas.drawRoundRect(shrinkRect, br, br, shrinkFillPaint);
+            shrinkRingPaint.setStrokeWidth(dpF(1));
+            canvas.drawRoundRect(shrinkRect, br, br, shrinkRingPaint);
+            canvas.drawRoundRect(closeRect, br, br, closeFillPaint);
+            closeRingPaint.setStrokeWidth(dpF(1));
+            canvas.drawRoundRect(closeRect, br, br, closeRingPaint);
+            shrinkTextPaint.setTextSize(spF(13));
+            closeTextPaint.setTextSize(spF(13));
+            float tBase = shrinkRect.centerY() + spF(13) * 0.36f;
+            canvas.drawText("缩小到侧边", shrinkRect.centerX(), tBase, shrinkTextPaint);
+            canvas.drawText("关掉", closeRect.centerX(), tBase, closeTextPaint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                float x = e.getX(), y = e.getY();
+                try {
+                    if (shrinkRect.contains(x, y)) {
+                        int s = promptSide, cy = promptCenterY;
+                        dismissPrompt();
+                        collapseToDock(s, cy);
+                    } else if (closeRect.contains(x, y)) {
+                        closeOverlayCompletely();
+                    } else {
+                        dismissPrompt(); // 点面板外（含遮罩）＝取消，什么都不做
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            return true; // 模态：所有触摸都吞掉，不漏给下层应用
         }
     }
 }
