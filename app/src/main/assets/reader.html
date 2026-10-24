@@ -22,9 +22,9 @@ section.ch:first-child h2{margin-top:.15em}
    竖排永不进列流（!important），竖排注释走原生固定注栏。注文小一号、色淡一档，
    左侧细竖线＋浅底与正文分层；.cur 时竖线转朱砂、注文转朱砂深色、底色加深，与正文高亮同步。 */
 .ntb{display:none;}
-body.noteson .ntb{display:block;font-size:.76em;line-height:1.8;color:#6E6455;background:rgba(169,124,44,.07);border-left:3px solid #D8CDB4;padding:.5em .75em;margin:.4em 0 .9em;text-align:justify;}
+body.noteson .ntb{display:block;font-size:.72em;line-height:1.55;color:#6E6455;background:rgba(169,124,44,.07);border-left:3px solid #D8CDB4;padding:.5em .75em;margin:.4em 0 .9em;text-align:justify;}
 body.vert .ntb{display:none !important;}
-.ntb .ntf{display:block;margin-top:.35em;font-size:.86em;color:#A97C2C;cursor:pointer;user-select:none;-webkit-user-select:none;}
+.ntb .ntf{display:block;margin-top:.35em;font-size:.86em;color:#A97C2C;user-select:none;-webkit-user-select:none;}
 .ntb.cur{border-left-color:#9E3B2B;background:rgba(158,59,43,.12);}
 .ntb.cur .ntt{color:#8A3226;}
 p{margin:0;text-align:justify;}
@@ -121,7 +121,7 @@ function noteFor(s){
 function noteFooter(n){
   var lab = n.ver === 'zj' ? '张居正的版本' : '朱熹的版本';
   if (n.b > n.a) lab += ' · 本注管第 ' + (n.a + 1) + '–' + (n.b + 1) + ' 句';
-  return lab + ' ⌄';
+  return lab;
 }
 function noteHTML(s){
   var n = noteFor(s);
@@ -623,8 +623,8 @@ document.addEventListener('click', function(e){
     if (e.clientX <= 28){ flipPage(1, true); return; }
     if (e.clientX >= window.innerWidth - 28){ flipPage(-1, true); return; }
   }
-  /* 注释页脚＝版本切换入口（走原生对话框）；注块本体点按不触发任何动作（不 seek、不沉浸） */
-  if (e.target.closest && e.target.closest('.ntf')){ Bridge.pickNoteVer(); return; }
+  /* 注释页脚自 v1.10.2 起只是静态标注（版本切换在「注释」按钮开启时选）；
+     注块本体点按不触发任何动作（不 seek、不沉浸），页脚在注块内一并被吞 */
   if (e.target.closest && e.target.closest('.ntb')) return;
   var t = e.target;
   var s = t.closest ? t.closest('.s') : null;

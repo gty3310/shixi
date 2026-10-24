@@ -92,13 +92,13 @@
                     android:id="@+id/readerNoteText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:lineSpacingMultiplier="1.35"
+                    android:lineSpacingMultiplier="1.15"
                     android:paddingLeft="12dp"
                     android:paddingTop="8dp"
                     android:paddingRight="12dp"
                     android:paddingBottom="4dp"
                     android:textColor="#4A4234"
-                    android:textSize="13sp" />
+                    android:textSize="12sp" />
             </ScrollView>
 
             <TextView

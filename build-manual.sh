@@ -26,7 +26,7 @@ $BT/aapt2 link -o $B/base.apk -I $AJAR \
   --java $B/gen \
   -A $SRC/assets \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 22 --version-name 1.10.1 \
+  --version-code 23 --version-name 1.10.2 \
   $B/compiled.zip
 
 echo "[3/6] javac"

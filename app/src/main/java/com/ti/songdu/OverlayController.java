@@ -8,7 +8,6 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -18,35 +17,29 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.WindowManager;
-import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 
 /**
- * v1.10.0 悬浮播放控件（宿主＝PlayerService：服务已是 mediaPlayback 前台服务，
+ * 悬浮播放控件（宿主＝PlayerService：服务已是 mediaPlayback 前台服务，
  * 悬浮件挂在它身上不再起第二个服务、不会出现两个通知）。
  *
- * 形态与手势（用户定的口径）：
- *  - 平时是贴在屏幕侧边的半圆形小按钮（半透明，圆心压在屏幕边缘外，只露半个圆），
- *    上面是播放/暂停图标；默认停右侧。
- *  - 轻点：直接切换播放/暂停；没有装载曲目时改为打开 App 主界面。
- *  - 长按（按住不动约 400ms）：展开成半透明卡片——当前正在读的句子（字幕式，
- *    随播放推进更换）＋播放/暂停钮＋右上角 ✕；再长按收回半圆。
- *  - 拖拽：按下后移动超过系统 touch slop 即判拖拽（长按判定随之取消），两态都可拖；
- *    松手吸附到最近的左/右边缘，侧边与竖直位置写 overlay_prefs 持久化。
- *  - ✕ 关闭：写 overlay_prefs/closed=true 并摘除窗口；MainActivity 下次全新启动时
- *    清该标记并重新拉起（见 MainActivity），悬浮件届时再出现。
+ * 形态：贴在屏幕侧边的半圆形小按钮（半透明，圆心压在屏幕边缘外，只露半圆），
+ * 上面是播放/暂停图标；默认停右侧。
  *
- * 窗口：TYPE_APPLICATION_OVERLAY + FLAG_NOT_FOCUSABLE（不抢焦点；卡片内按钮的点击
- * 在 NOT_FOCUSABLE 下照常分发）+ FLAG_NOT_TOUCH_MODAL（窗外触摸穿透到下层应用）。
+ * 手势（v1.10.2 改版，用户定的口径，四者互斥）：
+ *  - 轻点（按下抬起、没拖没长按）：切换播放/暂停；没有装载曲目时改为打开主界面。
+ *  - 长按（按住不动约 400ms）：打开当前曲目的阅读页；无装载曲目时打开主界面。
+ *  - 快速上滑（按下后 ≤300ms 内上移 ≥48dp 且竖直位移占优）：同长按，打开阅读页；
+ *    触发后本手势作废，不挪位、不再补发轻点。
+ *  - 慢拖（按住移动）：挪位置；松手吸附到最近的左/右边缘，侧边与竖直位置
+ *    写 overlay_prefs 持久化。慢拖与快滑靠时长区分：超过 300ms 的移动一律是拖。
+ * v1.10.0 的「长按展开字幕卡」已整体移除；悬浮件的关闭路径随之统一走播放通知的
+ * 「停止」：服务停掉悬浮件随之消失，MainActivity 下次全新启动再拉起（并清掉
+ * 历史版本可能留下的 closed 标记，见 MainActivity）。
+ *
+ * 窗口：TYPE_APPLICATION_OVERLAY + FLAG_NOT_FOCUSABLE（不抢焦点）
+ * + FLAG_NOT_TOUCH_MODAL（窗外触摸穿透到下层应用）。
  * 所有窗口操作 try/catch 隔离——悬浮件任何异常不得拖垮播放服务。
- *
- * 当前句来源（复用既有判定，不另造口径）：
- *  - 跟读开时用 PlayerService.followFlatIndex()（状态机维护的当前段代表句）；
- *  - 否则按位置查内容包拉平句表：句时间经 ContentRepo.scaleFor 缩放，二分找
- *    「最后一个 start<=pos 的句子、已过其句末归下一句」，与跟读状态机的
- *    followIndexForPosition 同一语义。简繁跟阅读页偏好 reader_prefs/trad（默认繁体）。
- * 刷新节律：500ms 轮询只读位置/状态，仅当句下标、曲目或播放态变化时才动 UI。
+ * 轮询 500ms 只同步播放/暂停图标，不做高频重绘。
  */
 public class OverlayController {
 
@@ -55,11 +48,8 @@ public class OverlayController {
     private static final String KEY_SIDE = "side";   // 0=左 1=右（默认右）
     private static final String KEY_Y = "y";         // 窗口顶边 y（px）；-1=未存
 
-    private static final int MODE_NONE = 0;
-    private static final int MODE_DOCKED = 1;
-    private static final int MODE_CARD = 2;
-
     private static final long LONG_PRESS_MS = 400;
+    private static final long SWIPE_MAX_MS = 300;
     private static final long POLL_MS = 500;
 
     private final Context ctx;
@@ -68,57 +58,38 @@ public class OverlayController {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final float density;
     private final int touchSlop;
+    private final int swipeDistPx;
 
-    private int mode = MODE_NONE;
+    private boolean attached = false;
     private HalfButtonView dockedView;
     private WindowManager.LayoutParams dockedLp;
-    private FrameLayout cardView;
-    private WindowManager.LayoutParams cardLp;
-    private TextView cardTitle;
-    private TextView cardSentence;
-    private TextView cardPlayBtn;
 
     // 当前显示状态（轮询比对，只在变化时动 UI）
     private boolean shownPlaying = false;
-    private String shownTrackId = null;
-    private int shownSentenceIdx = Integer.MIN_VALUE;
-
-    // 当前句解析缓存（按曲目 id＋简繁偏好构建，与 ContentRepo 的 Book 缓存同生命周期近似）
-    private String cacheTrackId = null;
-    private boolean cacheTrad = true;
-    private String[] flatTexts;      // 全拉平句文本（跟读下标直查用），无内容包时 null
-    private long[] audStarts;        // 可播句的缩放后 startMs（升序）
-    private long[] audEnds;
-    private int[] audFlatIdx;        // 可播句对应的拉平下标
 
     // 手势状态（同一时刻只跟踪一只手指，足够）
     private int gestureSeq = 0;
     private boolean gDragging = false;
     private boolean gLongFired = false;
+    private boolean gSwipeFired = false;
     private float gDownRawX, gDownRawY;
     private int gStartX, gStartY;
-    private View gView;
-    private WindowManager.LayoutParams gLp;
 
     private final Runnable longPressRunnable = new Runnable() {
         @Override
         public void run() {
-            if (gDragging || gLongFired) return;
+            if (gDragging || gLongFired || gSwipeFired) return;
             gLongFired = true;
-            try {
-                if (mode == MODE_DOCKED) expand();
-                else if (mode == MODE_CARD) collapse();
-            } catch (Exception ignored) {
-            }
+            openReaderPage();
         }
     };
 
     private final Runnable poll = new Runnable() {
         @Override
         public void run() {
-            if (mode == MODE_NONE) return;
+            if (!attached) return;
             try {
-                refreshContent();
+                refreshIcon();
             } catch (Exception ignored) {
             }
             ui.postDelayed(this, POLL_MS);
@@ -131,6 +102,7 @@ public class OverlayController {
         prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         density = ctx.getResources().getDisplayMetrics().density;
         touchSlop = ViewConfiguration.get(ctx).getScaledTouchSlop();
+        swipeDistPx = dp(48);
     }
 
     private int dp(float v) {
@@ -143,7 +115,7 @@ public class OverlayController {
 
     // ---------- 显示 / 隐藏 ----------
 
-    /** 拉起悬浮件：已被用户 ✕ 关掉（标记未清）或无悬浮窗权限时不显示。
+    /** 拉起悬浮件：关闭标记未清或无悬浮窗权限时不显示。
      *  服务 onCreate 与 ACTION_REFRESH_OVERLAY 都走这里，幂等。 */
     public void tryShow() {
         try {
@@ -155,19 +127,17 @@ public class OverlayController {
                 hide();
                 return;
             }
-            if (mode == MODE_NONE) attachDocked();
+            if (!attached) attachDocked();
             startPoll();
         } catch (Exception ignored) {
         }
     }
 
-    /** 摘除全部窗口并停轮询（服务销毁、被关掉、无权限时调用） */
+    /** 摘除窗口并停轮询（服务销毁、无权限时调用） */
     public void hide() {
         try {
             ui.removeCallbacks(poll);
             detachDocked();
-            detachCard();
-            mode = MODE_NONE;
         } catch (Exception ignored) {
         }
     }
@@ -223,7 +193,6 @@ public class OverlayController {
     // ---------- 半圆钮 ----------
 
     private void attachDocked() {
-        detachCard();
         if (dockedView == null) {
             dockedView = new HalfButtonView(ctx);
             dockedView.setOnTouchListener(new DragTouch());
@@ -238,162 +207,36 @@ public class OverlayController {
         dockedView.setPlaying(shownPlaying);
         try {
             wm.addView(dockedView, dockedLp);
-            mode = MODE_DOCKED;
+            attached = true;
         } catch (Exception e) {
-            mode = MODE_NONE;
+            attached = false;
         }
     }
 
     private void detachDocked() {
-        if (dockedView != null && mode == MODE_DOCKED) {
+        if (dockedView != null && attached) {
             try {
                 wm.removeView(dockedView);
             } catch (Exception ignored) {
             }
         }
-        if (mode == MODE_DOCKED) mode = MODE_NONE;
+        attached = false;
     }
 
-    // ---------- 展开卡片 ----------
-
-    private void buildCard() {
-        FrameLayout root = new FrameLayout(ctx);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xB0262626);           // 半透明深灰（约 69% 不透明）
-        bg.setCornerRadius(dp(16));
-        root.setBackground(bg);
-
-        LinearLayout col = new LinearLayout(ctx);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(14), dp(10), dp(14), dp(12));
-        root.addView(col, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-
-        cardTitle = new TextView(ctx);
-        cardTitle.setTextSize(12);
-        cardTitle.setTextColor(0xFFBFB6A4);
-        cardTitle.setSingleLine(true);
-        cardTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        col.addView(cardTitle);
-
-        cardSentence = new TextView(ctx);
-        cardSentence.setTextSize(17);
-        cardSentence.setTextColor(0xFFFFFFFF);
-        cardSentence.setLineSpacing(0, 1.18f);
-        cardSentence.setMaxLines(8);
-        cardSentence.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        sLp.topMargin = dp(6);
-        cardSentence.setLayoutParams(sLp);
-        col.addView(cardSentence);
-
-        cardPlayBtn = new TextView(ctx);
-        cardPlayBtn.setText("▶");
-        cardPlayBtn.setTextSize(19);
-        cardPlayBtn.setTextColor(0xFFFFFFFF);
-        cardPlayBtn.setGravity(Gravity.CENTER);
-        GradientDrawable circle = new GradientDrawable();
-        circle.setShape(GradientDrawable.OVAL);
-        circle.setColor(0x00000000);
-        circle.setStroke(dp(1), 0xFFD8CFBB);
-        cardPlayBtn.setBackground(circle);
-        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(dp(46), dp(46));
-        pLp.topMargin = dp(10);
-        cardPlayBtn.setLayoutParams(pLp);
-        cardPlayBtn.setOnClickListener(v -> onToggleTap());
-        col.addView(cardPlayBtn);
-
-        TextView close = new TextView(ctx);
-        close.setText("✕");
-        close.setTextSize(14);
-        close.setTextColor(0xFFD8CFBB);
-        close.setGravity(Gravity.CENTER);
-        FrameLayout.LayoutParams cLp = new FrameLayout.LayoutParams(dp(34), dp(34));
-        cLp.gravity = Gravity.TOP | Gravity.RIGHT;
-        close.setLayoutParams(cLp);
-        close.setOnClickListener(v -> closeByUser());
-        root.addView(close);
-
-        root.setOnTouchListener(new DragTouch());
-        cardView = root;
-    }
-
-    private void attachCard() {
-        detachDocked();
-        if (cardView == null) buildCard();
-        Point s = screenSize();
-        int w = Math.min(dp(300), (int) (s.x * 0.82f));
-        int x = side() == 1 ? s.x - w : 0;
-        cardLp = makeLp(w, WindowManager.LayoutParams.WRAP_CONTENT, x, savedY(dp(180)));
-        try {
-            wm.addView(cardView, cardLp);
-            mode = MODE_CARD;
-            // 高度出来后把顶边钳回屏内（WRAP_CONTENT 添加时还不知道真实高度）
-            cardView.post(() -> {
-                try {
-                    if (mode == MODE_CARD && cardLp != null) {
-                        int cy = clampY(cardLp.y, cardView.getHeight());
-                        if (cy != cardLp.y) {
-                            cardLp.y = cy;
-                            wm.updateViewLayout(cardView, cardLp);
-                        }
-                    }
-                } catch (Exception ignored) {
-                }
-            });
-            forceRefreshContent();
-        } catch (Exception e) {
-            mode = MODE_NONE;
-        }
-    }
-
-    private void detachCard() {
-        if (cardView != null && mode == MODE_CARD) {
-            try {
-                wm.removeView(cardView);
-            } catch (Exception ignored) {
-            }
-        }
-        if (mode == MODE_CARD) mode = MODE_NONE;
-    }
-
-    private void expand() {
-        if (mode != MODE_DOCKED) return;
-        attachCard();
-    }
-
-    private void collapse() {
-        if (mode != MODE_CARD) return;
-        attachDocked();
-        startPoll();
-    }
-
-    /** ✕：写关闭标记并摘窗；MainActivity 下次全新启动清标记后再拉起 */
-    private void closeByUser() {
-        try {
-            prefs.edit().putBoolean(KEY_CLOSED, true).apply();
-        } catch (Exception ignored) {
-        }
-        hide();
-    }
-
-    // ---------- 手势：轻点 / 长按 / 拖拽（三者靠「动不动＋时长」互斥） ----------
+    // ---------- 手势：轻点 / 长按 / 快上滑 / 慢拖（靠「动不动＋时长」互斥） ----------
 
     private class DragTouch implements View.OnTouchListener {
         @Override
         public boolean onTouch(View v, MotionEvent e) {
             try {
-                WindowManager.LayoutParams lp =
-                        (v == cardView) ? cardLp : dockedLp;
+                WindowManager.LayoutParams lp = dockedLp;
                 if (lp == null) return false;
                 switch (e.getActionMasked()) {
                     case MotionEvent.ACTION_DOWN: {
                         gestureSeq++;
                         gDragging = false;
                         gLongFired = false;
-                        gView = v;
-                        gLp = lp;
+                        gSwipeFired = false;
                         gDownRawX = e.getRawX();
                         gDownRawY = e.getRawY();
                         gStartX = lp.x;
@@ -405,11 +248,28 @@ public class OverlayController {
                         return true;
                     }
                     case MotionEvent.ACTION_MOVE: {
-                        if (v != gView) return true;
+                        // 长按已开阅读页、或快滑已触发：本手势作废，后续移动一律吞掉
+                        if (gLongFired || gSwipeFired) return true;
                         float dx = e.getRawX() - gDownRawX;
                         float dy = e.getRawY() - gDownRawY;
+                        long elapsed = e.getEventTime() - e.getDownTime();
+                        // 快上滑：≤300ms 内上移 ≥48dp 且竖直占优——先于慢拖判定；
+                        // 窗口若已被同手势的先行小位移拖动，先还原到按下处再打开
+                        if (elapsed <= SWIPE_MAX_MS && dy <= -swipeDistPx
+                                && Math.abs(dy) > 1.4f * Math.abs(dx)) {
+                            gSwipeFired = true;
+                            gestureSeq++;  // 取消待触发的长按
+                            if (gDragging) {
+                                gDragging = false;
+                                lp.x = gStartX;
+                                lp.y = gStartY;
+                                wm.updateViewLayout(v, lp);
+                            }
+                            openReaderPage();
+                            return true;
+                        }
                         if (!gDragging && Math.hypot(dx, dy) > touchSlop) {
-                            // 一动即拖拽：取消本次长按判定（seq 自增使待触发的长按失效）
+                            // 一动即慢拖：取消本次长按判定（seq 自增使待触发的长按失效）
                             gDragging = true;
                             gestureSeq++;
                         }
@@ -428,21 +288,17 @@ public class OverlayController {
                         // 失效尚未触发的长按投递（按 seq 比对，见 ACTION_DOWN 的 postDelayed）
                         gestureSeq++;
                         boolean wasDrag = gDragging;
-                        boolean wasLong = gLongFired;
+                        boolean wasSpent = gLongFired || gSwipeFired;
                         gDragging = false;
                         gLongFired = false;
-                        if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                        gSwipeFired = false;
+                        if (!wasSpent) {
                             if (wasDrag) {
                                 snapToEdge(v, lp);
-                            } else if (!wasLong) {
-                                // 轻点只对半圆钮有定义；卡片背景轻点无动作
-                                // （卡上播放键、✕ 是子视图，自行消费点击，不经这里）
-                                if (mode == MODE_DOCKED && v == dockedView) onToggleTap();
+                            } else if (e.getActionMasked() == MotionEvent.ACTION_UP) {
+                                onToggleTap();
                             }
-                        } else if (wasDrag) {
-                            snapToEdge(v, lp);
                         }
-                        gView = null;
                         return true;
                     }
                     default:
@@ -465,14 +321,14 @@ public class OverlayController {
             lp.y = clampY(lp.y, h);
             wm.updateViewLayout(v, lp);
             prefs.edit().putInt(KEY_SIDE, newSide).putInt(KEY_Y, lp.y).apply();
-            if (v == dockedView && dockedView != null) dockedView.setSide(newSide == 1);
+            if (dockedView != null) dockedView.setSide(newSide == 1);
         } catch (Exception ignored) {
         }
     }
 
-    // ---------- 播放控制与内容刷新 ----------
+    // ---------- 播放控制与跳转 ----------
 
-    /** 轻点 / 卡上播放键：有曲目走 PlayerService 既有 toggle；无曲目打开主界面 */
+    /** 轻点：有曲目走 PlayerService 既有 toggle；无曲目打开主界面 */
     private void onToggleTap() {
         try {
             PlayerService svc = PlayerService.instance;
@@ -482,6 +338,28 @@ public class OverlayController {
             }
         } catch (Exception ignored) {
         }
+        openMain();
+    }
+
+    /** 长按 / 快上滑：打开当前曲目的阅读页（intent 口径同 MainActivity 点条目进
+     *  阅读页：EXTRA_TRACK_ID 传曲目 id；服务上下文起 Activity 须加 NEW_TASK）；
+     *  无装载曲目时打开主界面。 */
+    private void openReaderPage() {
+        try {
+            PlayerService svc = PlayerService.instance;
+            if (svc != null && svc.current != null) {
+                Intent r = new Intent(ctx, ReaderActivity.class);
+                r.putExtra(ReaderActivity.EXTRA_TRACK_ID, svc.current.id);
+                r.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(r);
+                return;
+            }
+        } catch (Exception ignored) {
+        }
+        openMain();
+    }
+
+    private void openMain() {
         try {
             Intent open = new Intent(ctx, MainActivity.class);
             open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -490,116 +368,14 @@ public class OverlayController {
         }
     }
 
-    private void forceRefreshContent() {
-        shownTrackId = null;
-        shownSentenceIdx = Integer.MIN_VALUE;
-        refreshContent();
-    }
-
-    /** 500ms 轮询体：只在播放态/曲目/句下标变化时动 UI（不做高频重绘） */
-    private void refreshContent() {
+    /** 500ms 轮询体：仅同步播放/暂停图标，状态没变不动 UI */
+    private void refreshIcon() {
         PlayerService svc = PlayerService.instance;
         boolean playingNow = svc != null && svc.playing;
         if (playingNow != shownPlaying) {
             shownPlaying = playingNow;
             if (dockedView != null) dockedView.setPlaying(playingNow);
-            if (cardPlayBtn != null) cardPlayBtn.setText(playingNow ? "❚❚" : "▶");
         }
-        if (mode != MODE_CARD) return;
-
-        Track cur = svc != null ? svc.current : null;
-        String tid = cur != null ? cur.id : null;
-        if (tid == null ? shownTrackId != null : !tid.equals(shownTrackId)) {
-            shownTrackId = tid;
-            shownSentenceIdx = Integer.MIN_VALUE;
-            if (cardTitle != null) cardTitle.setText(cur != null ? cur.title : "");
-            rebuildSentenceCache(svc, cur);
-        } else {
-            // 简繁偏好在同曲目内被改动时也重建一次（低频比对，开销可忽略）
-            boolean trad = ctx.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
-                    .getBoolean("trad", true);
-            if (flatTexts != null && trad != cacheTrad) rebuildSentenceCache(svc, cur);
-        }
-        if (cur == null) {
-            if (shownSentenceIdx != -2) {
-                shownSentenceIdx = -2;
-                if (cardSentence != null) cardSentence.setText("时习");
-            }
-            return;
-        }
-        int idx = currentSentenceFlatIdx(svc, cur);
-        if (idx != shownSentenceIdx) {
-            shownSentenceIdx = idx;
-            if (cardSentence != null) {
-                String text = null;
-                if (flatTexts != null && idx >= 0 && idx < flatTexts.length) text = flatTexts[idx];
-                cardSentence.setText(text != null && text.length() > 0 ? text : cur.title);
-            }
-        }
-    }
-
-    private void rebuildSentenceCache(PlayerService svc, Track cur) {
-        flatTexts = null;
-        audStarts = null;
-        audEnds = null;
-        audFlatIdx = null;
-        cacheTrackId = null;
-        if (svc == null || cur == null) return;
-        try {
-            cacheTrad = ctx.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
-                    .getBoolean("trad", true);
-            ContentRepo.Book b = ContentRepo.bookForTrack(ctx, cur);
-            if (b == null || b.flat.isEmpty()) return;
-            double scale = ContentRepo.scaleFor(cur, b);
-            flatTexts = new String[b.flat.size()];
-            int aud = 0;
-            for (int i = 0; i < b.flat.size(); i++) {
-                ContentRepo.Sentence s = b.flat.get(i);
-                flatTexts[i] = cacheTrad ? s.textT : s.textS;
-                if (!s.noAudio && s.startMs >= 0) aud++;
-            }
-            audStarts = new long[aud];
-            audEnds = new long[aud];
-            audFlatIdx = new int[aud];
-            int k = 0;
-            for (int i = 0; i < b.flat.size(); i++) {
-                ContentRepo.Sentence s = b.flat.get(i);
-                if (s.noAudio || s.startMs < 0) continue;
-                audStarts[k] = Math.round(s.startMs * scale);
-                audEnds[k] = Math.round(s.endMs * scale);
-                audFlatIdx[k] = i;
-                k++;
-            }
-            cacheTrackId = cur.id;
-        } catch (Exception ignored) {
-            flatTexts = null;
-            audStarts = null;
-        }
-    }
-
-    /** 当前句的拉平下标：跟读开走状态机口径；否则位置二分（与 followIndexForPosition 同语义） */
-    private int currentSentenceFlatIdx(PlayerService svc, Track cur) {
-        if (svc.followEnabled) {
-            int fi = svc.followFlatIndex();
-            if (fi >= 0) return fi;
-        }
-        if (audStarts == null || audStarts.length == 0) return -1;
-        long pos = svc.currentPosition();
-        int lo = 0, hi = audStarts.length - 1, ans = -1;
-        while (lo <= hi) {
-            int mid = (lo + hi) / 2;
-            if (audStarts[mid] <= pos) {
-                ans = mid;
-                lo = mid + 1;
-            } else {
-                hi = mid - 1;
-            }
-        }
-        if (ans < 0) return audFlatIdx[0];
-        if (pos >= audEnds[ans]) {
-            return ans + 1 < audStarts.length ? audFlatIdx[ans + 1] : audFlatIdx[ans];
-        }
-        return audFlatIdx[ans];
     }
 
     // ---------- 半圆钮视图：整圆圆心压在窗外边缘，只露半圆 ----------

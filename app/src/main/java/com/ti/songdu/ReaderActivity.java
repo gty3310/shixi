@@ -223,16 +223,23 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         });
         btnRFollowChars.setOnClickListener(v -> showChunkCharsDialog());
         btnRNotes.setOnClickListener(v -> {
-            notesOn = !notesOn;
-            prefs.edit().putBoolean("notes", notesOn).apply();
-            web.evaluateJavascript("setNotesOn(" + notesOn + ")", null);
-            refreshNotesButton();
-            refreshNoteBar();
-            if (notesOn && !hasNotes) {
-                Toast.makeText(this, "本书暂无注释数据", Toast.LENGTH_SHORT).show();
+            if (notesOn) {
+                // 点关：直接关、不弹窗
+                notesOn = false;
+                prefs.edit().putBoolean("notes", false).apply();
+                web.evaluateJavascript("setNotesOn(false)", null);
+                refreshNotesButton();
+                refreshNoteBar();
+                return;
             }
+            // 点开：无注书目不弹选版窗，提示后保持关闭
+            if (!hasNotes) {
+                Toast.makeText(this, "本书暂无注释数据", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            // 点开：先弹选版小窗，选定后才开启（取消则保持关闭）
+            showNoteVerChooser();
         });
-        readerNoteFooter.setOnClickListener(v -> showNoteVerDialog());
         findViewById(R.id.btnRFont).setOnClickListener(v -> showFontPanel());
         btnRScript.setOnClickListener(v -> {
             useTrad = !useTrad;
@@ -283,23 +290,87 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRNotes.setBackground(g);
     }
 
-    /** v1.9.0 版本选择：与每段字数同款单选对话框；页脚点按（页内/竖排注栏）都走这里。
-     *  选中即持久化，并回推 JS 全书重填注文＋刷新竖排注栏。 */
-    private void showNoteVerDialog() {
-        String[] labels = {"张居正《四书直解》", "朱熹《四书章句集注》"};
-        int checked = "jizhu".equals(notesVer) ? 1 : 0;
-        new AlertDialog.Builder(this)
-                .setTitle("注释版本")
-                .setSingleChoiceItems(labels, checked, (d, which) -> {
-                    notesVer = which == 1 ? "jizhu" : "zhijie";
-                    prefs.edit().putString("notesVer", notesVer).apply();
-                    web.evaluateJavascript("setNotesVer('" + notesVer + "')", null);
-                    noteBarKey = null;
-                    refreshNoteBar();
-                    d.dismiss();
-                })
+    /**
+     * v1.10.2 选版小窗：只在用户亲手点开「注释」时弹（页面重建恢复开态不走这里）。
+     * 两个版本各一块：标题＋一小行说明；上次所选带 ✓ 并高亮。点某一块即
+     * 选定＋关窗＋开启注释（一步完成）；「取消」或点外关闭则保持关闭、什么都不改。
+     */
+    private void showNoteVerChooser() {
+        float density = getResources().getDisplayMetrics().density;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int padH = (int) (20 * density), padTop = (int) (14 * density), padBot = (int) (6 * density);
+        root.setPadding(padH, padTop, padH, padBot);
+        root.addView(noteVerOption(density, "zhijie",
+                "张居正《四书直解》",
+                "明朝首辅给十岁小皇帝讲课的讲稿，近乎白话，讲得细。适合第一次读、想轻松读懂的人。"));
+        View gap = new View(this);
+        root.addView(gap, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (int) (10 * density)));
+        root.addView(noteVerOption(density, "jizhu",
+                "朱熹《四书章句集注》",
+                "南宋朱熹的注本，八百年读书人的标准，文言短注、义理最全。适合文言有底子、想看原汁原味的人。"));
+        final AlertDialog[] dlg = new AlertDialog[1];
+        for (int i = 0; i < root.getChildCount(); i++) {
+            final View child = root.getChildAt(i);
+            Object tag = child.getTag();
+            if (tag instanceof String) {
+                final String ver = (String) tag;
+                child.setOnClickListener(v -> {
+                    applyNoteVerAndEnable(ver);
+                    if (dlg[0] != null) dlg[0].dismiss();
+                });
+            }
+        }
+        dlg[0] = new AlertDialog.Builder(this)
+                .setTitle("选择注释版本")
+                .setView(root)
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    /** 选版窗里的一块选项：整块可点；是上次所选时带 ✓ 且底色高亮 */
+    private View noteVerOption(float density, String ver, String title, String desc) {
+        boolean selected = ver.equals(notesVer);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setTag(ver);
+        int pad = (int) (12 * density);
+        box.setPadding(pad, (int) (10 * density), pad, (int) (10 * density));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(10 * density);
+        bg.setColor(selected ? 0xFFF1E2C4 : 0xFFF7F2E9);
+        bg.setStroke((int) density, selected ? 0xFFA97C2C : 0xFFD8CDB4);
+        box.setBackground(bg);
+        TextView t = new TextView(this);
+        t.setText((selected ? "✓ " : "") + title);
+        t.setTextSize(16);
+        t.setTextColor(0xFF26221C);
+        t.setTypeface(null, Typeface.BOLD);
+        box.addView(t);
+        TextView d = new TextView(this);
+        d.setText(desc);
+        d.setTextSize(12);
+        d.setTextColor(0xFF6E6455);
+        d.setLineSpacing(0, 1.3f);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        dlp.topMargin = (int) (4 * density);
+        d.setLayoutParams(dlp);
+        box.addView(d);
+        return box;
+    }
+
+    /** 选版确定：持久化版本＋开态，回推 JS 按新版本重填注块并显示，再刷新钮与竖排注栏 */
+    private void applyNoteVerAndEnable(String ver) {
+        notesVer = ver;
+        notesOn = true;
+        prefs.edit().putString("notesVer", ver).putBoolean("notes", true).apply();
+        web.evaluateJavascript("setNotesVer('" + ver + "')", null);
+        web.evaluateJavascript("setNotesOn(true)", null);
+        noteBarKey = null;
+        refreshNotesButton();
+        refreshNoteBar();
     }
 
     /** 本句要显示的注：优先选定版本，无块覆盖才回退另一家；zjFlag[0] 回报实际用的哪家 */
@@ -337,7 +408,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             if (!key.equals(noteBarKey)) {
                 noteBarKey = key;
                 readerNoteText.setText("播放或点按一句，这里显示这一句的注释。");
-                readerNoteFooter.setText(defLab + " ⌄");
+                readerNoteFooter.setText(defLab);
                 readerNoteScroll.scrollTo(0, 0);
             }
             return;
@@ -349,7 +420,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             if (!key.equals(noteBarKey)) {
                 noteBarKey = key;
                 readerNoteText.setText("本句暂无注释。");
-                readerNoteFooter.setText(defLab + " ⌄");
+                readerNoteFooter.setText(defLab);
                 readerNoteScroll.scrollTo(0, 0);
             }
             return;
@@ -362,7 +433,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             if (ref.endFlat > ref.startFlat) {
                 lab += " · 本注管第 " + (ref.startFlat + 1) + "–" + (ref.endFlat + 1) + " 句";
             }
-            readerNoteFooter.setText(lab + " ⌄");
+            readerNoteFooter.setText(lab);
             readerNoteScroll.scrollTo(0, 0);
         }
     }
@@ -731,12 +802,6 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         public void naTap() {
             runOnUiThread(() ->
                     Toast.makeText(ReaderActivity.this, "这一句录音中未诵读", Toast.LENGTH_SHORT).show());
-        }
-
-        /** v1.9.0 页内注脚点按：与竖排注栏页脚共用同一个版本选择对话框 */
-        @JavascriptInterface
-        public void pickNoteVer() {
-            runOnUiThread(() -> showNoteVerDialog());
         }
 
         @JavascriptInterface
