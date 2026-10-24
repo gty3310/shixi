@@ -30,6 +30,11 @@ public final class FollowChunker {
         public int lastFlat;
         /** 段内汉字数（自检用） */
         public int han;
+        /** v1.13.0 悬浮播放卡显段文本用（纯显示、不参与状态机判定）：段首字在
+         *  firstFlat 句 textT 中的 UTF-16 下标、段末字（不含）在 lastFlat 句
+         *  textT 中的 UTF-16 下标。整句段分别为 0 与末句全文长 */
+        public int startU16;
+        public int endU16;
     }
 
     /** 输入句（时间已缩放；breakMs 与 breakPos 一一对应、已按同一系数缩放） */
@@ -128,6 +133,7 @@ public final class FollowChunker {
     private static final class Acc {
         long startMs, endMs;
         int firstFlat, lastFlat, han;
+        int startU16, endU16;
 
         void reset(Clause c, int flat) {
             startMs = c.startMs;
@@ -135,12 +141,15 @@ public final class FollowChunker {
             firstFlat = flat;
             lastFlat = flat;
             han = c.han;
+            startU16 = c.startU16;
+            endU16 = c.endU16;
         }
 
         void add(Clause c, int flat) {
             endMs = c.endMs;
             lastFlat = flat;
             han += c.han;
+            endU16 = c.endU16;
         }
 
         Chunk build() {
@@ -150,6 +159,8 @@ public final class FollowChunker {
             ch.firstFlat = firstFlat;
             ch.lastFlat = lastFlat;
             ch.han = han;
+            ch.startU16 = startU16;
+            ch.endU16 = endU16;
             return ch;
         }
     }
@@ -166,6 +177,8 @@ public final class FollowChunker {
                 ch.lastFlat = s.flat;
                 ch.han = hanCount(s.textT == null ? "" : s.textT, 0,
                         s.textT == null ? 0 : s.textT.length());
+                ch.startU16 = 0;
+                ch.endU16 = s.textT == null ? 0 : s.textT.length();
                 out.add(ch);
             }
             return out;
@@ -228,6 +241,7 @@ public final class FollowChunker {
         int hanSeen = 0;
         long pieceStart = c.startMs;
         int pieceHan = 0;
+        int pieceStartU16 = c.startU16;
         int i = c.startU16;
         while (i < c.endU16) {
             int cp = Character.codePointAt(t, i);
@@ -246,9 +260,12 @@ public final class FollowChunker {
                     ch.firstFlat = s.flat;
                     ch.lastFlat = s.flat;
                     ch.han = pieceHan;
+                    ch.startU16 = pieceStartU16;
+                    ch.endU16 = cut;
                     out.add(ch);
                     pieceStart = cutT;
                     pieceHan = 0;
+                    pieceStartU16 = cut;
                 }
             }
             i = next;
@@ -259,6 +276,8 @@ public final class FollowChunker {
         ch.firstFlat = s.flat;
         ch.lastFlat = s.flat;
         ch.han = pieceHan;
+        ch.startU16 = pieceStartU16;
+        ch.endU16 = c.endU16;
         out.add(ch);
     }
 }

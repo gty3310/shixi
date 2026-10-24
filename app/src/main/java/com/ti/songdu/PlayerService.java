@@ -161,6 +161,10 @@ public class PlayerService extends Service {
     /** 每段的起止句在拉平句表中的下标（高亮联动：播放中报段首句、gap 报段末句） */
     private int[] foFirst = null;
     private int[] foLast = null;
+    /** v1.13.0 每段的字范围（textT 的 UTF-16 下标：start 相对段首句、end 相对段末句），
+     *  只供悬浮播放卡拼段文本，与 foFirst/foLast 同建同废，不参与状态机判定 */
+    private int[] foStartU16 = null;
+    private int[] foEndU16 = null;
     // ---------- v1.8.5 跟读调试读数（纯旁路采样：只读不写判定量，不参与任何跟读判定） ----------
     /** 停止过冲统计：followStep 判定段末的那一刻采样（ms）。v1.8.6 起判定点已前移
      *  到 effStop，读数口径改为相对**未提前的原始停止点**：over＝触发位置−foStop，
@@ -336,6 +340,17 @@ public class PlayerService extends Service {
         return followPhase == FOLLOW_GAP ? foLast[followIndex] : foFirst[followIndex];
     }
 
+    /** v1.13.0 悬浮播放卡只读接口：当前跟读段的 {首句拉平下标, 末句拉平下标,
+     *  首字在首句 textT 中的 UTF-16 下标, 末字（不含）在末句 textT 中的 UTF-16 下标}；
+     *  跟读未开、段轴未建或当前无段时返回 null。纯读，不影响状态机 */
+    public int[] followSegment() {
+        if (!followEnabled || followIndex < 0 || foFirst == null
+                || followIndex >= foFirst.length || foStartU16 == null
+                || followIndex >= foStartU16.length) return null;
+        return new int[]{foFirst[followIndex], foLast[followIndex],
+                foStartU16[followIndex], foEndU16[followIndex]};
+    }
+
     /**
      * v1.7 改每段字数：持久化＋作废段轴；正在跟读时立即按新字数重算——
      * 播放中不打断声音，阶段回 IDLE 由状态机按当前位置以新段接上；
@@ -351,6 +366,8 @@ public class PlayerService extends Service {
         foStop = null;
         foFirst = null;
         foLast = null;
+        foStartU16 = null;
+        foEndU16 = null;
         if (!followEnabled) {
             notifyState();
             return;
@@ -392,6 +409,8 @@ public class PlayerService extends Service {
         foStop = null;
         foFirst = null;
         foLast = null;
+        foStartU16 = null;
+        foEndU16 = null;
         // v1.5：统一走 bookForTrack（论语返回单篇 Book，跟读轴即该篇篇内时间轴）
         ContentRepo.Book b = ContentRepo.bookForTrack(getApplicationContext(), current);
         if (b == null) return false;
@@ -427,11 +446,15 @@ public class PlayerService extends Service {
         foStop = new long[chunks.size()];
         foFirst = new int[chunks.size()];
         foLast = new int[chunks.size()];
+        foStartU16 = new int[chunks.size()];
+        foEndU16 = new int[chunks.size()];
         for (int i = 0; i < chunks.size(); i++) {
             foStart[i] = chunks.get(i).startMs;
             foEnd[i] = chunks.get(i).endMs;
             foFirst[i] = chunks.get(i).firstFlat;
             foLast[i] = chunks.get(i).lastFlat;
+            foStartU16[i] = chunks.get(i).startU16;
+            foEndU16[i] = chunks.get(i).endU16;
         }
         // v1.8.1 实际停止点（未提前的原值）：本段末句与下一段首句同小节 → 停到下一段
         // 起点（重合）；跨小节、最后一段 → 停在本段自身句末。
@@ -665,6 +688,8 @@ public class PlayerService extends Service {
         foStop = null;
         foFirst = null;
         foLast = null;
+        foStartU16 = null;
+        foEndU16 = null;
         if (followEnabled && current != null && ContentRepo.bookIdFor(current) == null) {
             setFollowEnabled(false);
         }
