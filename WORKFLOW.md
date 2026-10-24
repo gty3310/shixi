@@ -6,7 +6,7 @@
 
 - 安卓诵读 App，包名 `com.ti.songdu`，仓库 `github.com/gty3310/shixi`，许可 CC BY-NC-SA 4.0（可继续开发，但动手前知会作者一声是礼仪约定）。
 - 构建：`build-manual.sh`（本地 JDK 17 与 Android SDK，零第三方依赖）。
-- 交付：APK 只经 Google Drive 交付（文件夹「青山书院 / 明师班课程内容」），上传后必须回读核对文件大小与 md5 一致才算交付。版本号与 versionCode 递增。
+- 交付：APK 只经 Google Drive 交付（文件夹「_软件 / 时习 APP / 安装文件」，只放最新版），上传后必须回读核对文件大小与 md5 一致才算交付。版本号与 versionCode 递增。
 
 ## 内置与在线书库
 
