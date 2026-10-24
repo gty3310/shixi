@@ -26,7 +26,7 @@ $BT/aapt2 link -o $B/base.apk -I $AJAR \
   --java $B/gen \
   -A $SRC/assets \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 31 --version-name 1.16.1 \
+  --version-code 32 --version-name 1.16.2 \
   $B/compiled.zip
 
 echo "[2.5/6] gen StoreSecrets（书库令牌：只进 build 目录，永不入库）"

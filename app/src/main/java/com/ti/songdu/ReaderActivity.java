@@ -969,7 +969,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private void askDownloadModel() {
         new AlertDialog.Builder(this)
                 .setTitle("识读需要下载识别模型")
-                .setMessage("离线语音识别模型约 25MB，只下一次，之后断网也能用。")
+                .setMessage("从时习的模型仓下载离线语音识别模型（约 25MB），只下一次，之后断网也能用。")
                 .setPositiveButton("下载", (d, w) -> downloadModel())
                 .setNegativeButton("取消", null)
                 .show();

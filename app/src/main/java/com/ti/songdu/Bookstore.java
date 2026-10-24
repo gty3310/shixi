@@ -560,8 +560,8 @@ public final class Bookstore {
      * 返回写入字节数；md 不为 null 时同步喂入摘要；chunkPl 不为 null 时按解码
      * 字节数回调进度（t 参数无意义，调用方按整本口径换算）。
      */
-    static long downloadContentsFile(String repo, String path, File dest,
-                                     MessageDigest md, ProgressListener chunkPl) throws Exception {
+    public static long downloadContentsFile(String repo, String path, File dest,
+                                              MessageDigest md, ProgressListener chunkPl) throws Exception {
         String token = StoreConfig.TOKEN;
         if (token == null || token.isEmpty()) throw new Exception("缺少书库令牌（构建时未注入）");
         String url = StoreConfig.API_BASE + "/repos/" + StoreConfig.OWNER + "/" + repo
