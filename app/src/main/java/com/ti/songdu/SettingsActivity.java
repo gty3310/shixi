@@ -22,8 +22,11 @@ import android.widget.Toast;
 /**
  * v1.11.0 总设置页：集中管理每项功能的「默认状态」与「阅读页按钮显示与否」，
  * 以及悬浮字幕的显示意愿、启动行为、透明度与权限。
- * v1.12.0 增「卡片阅读数」组：主页卡片小字行显示哪个时段的阅读数
- * （reader_prefs/cardStat：today/yesterday/daybefore/week/month/total，默认 today）。
+ * v1.12.0 增「卡片阅读数」组（单选时段）。
+ * v1.14.1：增「播放」组（单曲循环开关，沿用 reader_prefs/loop，与阅读页开关
+ * 同一份；默认开；关时读完自动接下一本）；「卡片阅读数」改多选（键
+ * reader_prefs/cardStats 字符串集合，选项今日/昨日/前日/本周/上周/本月/
+ * 上月/总计，默认今日、昨日、上周、本月、上月；旧单选值自动迁移为单项集合）。
  *
  * 口径（用户定）：
  *  - 与阅读页/主页共用同一份偏好：阅读默认与显隐写 reader_prefs、跟读分段写
@@ -74,6 +77,20 @@ public class SettingsActivity extends Activity {
         hint.setPadding(0, dp(8), 0, dp(6));
         root.addView(hint);
 
+        // ---------- 播放组（v1.14.1） ----------
+        addGroupTitle(root, "播放");
+        addSegRow(root, "单曲循环", new String[]{"开", "关"},
+                loopSingleNow() ? 0 : 1,
+                idx -> setLoopSingle(idx == 0));
+        TextView loopHint = new TextView(this);
+        loopHint.setText("开：一本书读完自动从头再读（一直以来的行为）。关：读完自动接列表里的下一本，最后一本读完停。");
+        loopHint.setTextSize(12);
+        loopHint.setTextColor(getColor(R.color.muted));
+        loopHint.setPadding(dp(2), dp(2), 0, dp(4));
+        root.addView(loopHint);
+
+        addDivider(root);
+
         // ---------- 阅读组 ----------
         addGroupTitle(root, "阅读");
 
@@ -115,43 +132,47 @@ public class SettingsActivity extends Activity {
 
         addDivider(root);
 
-        // ---------- 卡片阅读数组（v1.12.0） ----------
+        // ---------- 卡片阅读数组（v1.12.0 单选 → v1.14.1 多选） ----------
         addGroupTitle(root, "卡片阅读数");
         TextView statHint = new TextView(this);
-        statHint.setText("主页每本书卡片上显示哪个时段的阅读数，就在这里选。");
+        statHint.setText("主页每本书卡片上显示哪些时段的阅读数，就在这里勾（可多选）。");
         statHint.setTextSize(13);
         statHint.setTextColor(getColor(R.color.muted));
         statHint.setPadding(0, dp(2), 0, dp(2));
         root.addView(statHint);
-        final String[] statKeys = {"today", "yesterday", "daybefore", "week", "month", "total"};
-        final String[] statLabels = {"今日", "昨日", "前日", "本周", "本月", "总"};
-        String curStat = readerPrefs.getString("cardStat", "today");
-        int statIdx = 0;
-        for (int i = 0; i < statKeys.length; i++) {
-            if (statKeys[i].equals(curStat)) statIdx = i;
+        final String[] statKeys = MainActivity.CARD_STAT_KEYS;
+        final String[] statLabels = {"今日", "昨日", "前日", "本周", "上周", "本月", "上月", "总计"};
+        // 生效勾选与 MainActivity 同口径（旧单选 cardStat 自动算作单项集合）
+        final java.util.Set<String> statSel =
+                new java.util.HashSet<>(MainActivity.cardStatSelection(readerPrefs));
+        // 八个选项分两行放（一行八个太挤，标签会挤变形）
+        for (int r = 0; r < 2; r++) {
+            LinearLayout statRow = rowLine();
+            for (int c = 0; c < 4; c++) {
+                final int idx = r * 4 + c;
+                final TextView chip = new TextView(this);
+                chip.setText(statLabels[idx]);
+                chip.setTextSize(13);
+                chip.setGravity(Gravity.CENTER);
+                chip.setPadding(dp(4), dp(6), dp(4), dp(6));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+                if (c > 0) lp.leftMargin = dp(6);
+                chip.setLayoutParams(lp);
+                styleMultiChip(chip, statSel.contains(statKeys[idx]));
+                chip.setOnClickListener(v -> {
+                    boolean on = !statSel.contains(statKeys[idx]);
+                    if (on) statSel.add(statKeys[idx]);
+                    else statSel.remove(statKeys[idx]);
+                    styleMultiChip(chip, on);
+                    readerPrefs.edit()
+                            .putStringSet("cardStats", new java.util.HashSet<>(statSel))
+                            .apply();
+                });
+                statRow.addView(chip);
+            }
+            root.addView(statRow);
         }
-        LinearLayout statRow = rowLine();
-        final TextView[] statChips = new TextView[statLabels.length];
-        for (int i = 0; i < statLabels.length; i++) {
-            final int idx = i;
-            TextView chip = new TextView(this);
-            chip.setText(statLabels[i]);
-            chip.setTextSize(13);
-            chip.setGravity(Gravity.CENTER);
-            chip.setPadding(dp(4), dp(6), dp(4), dp(6));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-            if (i > 0) lp.leftMargin = dp(6);
-            chip.setLayoutParams(lp);
-            chip.setOnClickListener(v -> {
-                styleChips(statChips, idx);
-                readerPrefs.edit().putString("cardStat", statKeys[idx]).apply();
-            });
-            statChips[i] = chip;
-            statRow.addView(chip);
-        }
-        styleChips(statChips, statIdx);
-        root.addView(statRow);
 
         addDivider(root);
 
@@ -312,6 +333,38 @@ public class SettingsActivity extends Activity {
         Intent i = new Intent(this, PlayerService.class)
                 .setAction(PlayerService.ACTION_HIDE_OVERLAY);
         startService(i);
+    }
+
+    // ---------- 单曲循环（真源在 PlayerService，持久化沿用 reader_prefs/loop） ----------
+
+    private boolean loopSingleNow() {
+        PlayerService svc = PlayerService.instance;
+        if (svc != null) return svc.loopEnabled;
+        return readerPrefs.getBoolean("loop", true);
+    }
+
+    private void setLoopSingle(boolean on) {
+        PlayerService svc = PlayerService.instance;
+        if (svc != null) svc.setLoopEnabled(on); // 服务内部同步写 reader_prefs/loop
+        else readerPrefs.edit().putBoolean("loop", on).apply();
+    }
+
+    /** 多选钮样式（与 styleChips 同一套视觉：朱砂填充＝已勾选，描边＝未勾选） */
+    private void styleMultiChip(TextView chip, boolean sel) {
+        float density = getResources().getDisplayMetrics().density;
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(999 * density);
+        if (sel) {
+            g.setColor(getColor(R.color.accent));
+            chip.setTextColor(0xFFFFFFFF);
+            chip.setTypeface(null, Typeface.BOLD);
+        } else {
+            g.setColor(0x00000000);
+            g.setStroke(Math.max(1, (int) density), getColor(R.color.border));
+            chip.setTextColor(getColor(R.color.ink));
+            chip.setTypeface(null, Typeface.NORMAL);
+        }
+        chip.setBackground(g);
     }
 
     // ---------- 跟读分段（真源在 PlayerService/follow_prefs，与阅读页同口径） ----------

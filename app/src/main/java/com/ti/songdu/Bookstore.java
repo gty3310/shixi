@@ -40,8 +40,10 @@ import java.util.concurrent.Executors;
  * 令牌一律 403，禁用）；列目录只用于清单，不取文件体。
  *
  * 落盘与注册：整本先下到 files/books_staging/&lt;bookId&gt;/，逐文件验 size
- * 与 md5，全齐才整体移入 files/books/&lt;bookId&gt;/ 并注册曲目（半成品自动
- * 清理、不注册）。下载书的曲目 id 沿用预置口径（preset-zhongyong-full /
+ * 与 md5，全齐才逐文件合并移入 files/books/&lt;bookId&gt;/ 并注册曲目。
+ * v1.14.1 起 staging 跨失败保留：单文件失败自动重试（间隔递增），整本最终
+ * 失败也不清 staging——用户再点下载时已验过的文件直接复用、只补缺失的，
+ * 不从零开始。下载书的曲目 id 沿用预置口径（preset-zhongyong-full /
  * preset-lunyu-NN），records 按 id 绑定、与预置时代无缝衔接。
  *
  * 删书红线：只删本地文件与曲目条目，records.json 一律不动——阅读时长与
@@ -89,7 +91,14 @@ public final class Bookstore {
         void onProgress(long doneBytes, long totalBytes);
 
         void onDone(boolean ok, String error);
+
+        /** v1.14.1：某文件第 attempt 次尝试（2 起）开始前回调，供界面显示重试提示 */
+        void onFileRetry(String path, int attempt, int maxAttempts, String reason);
     }
+
+    /** v1.14.1：单文件下载尝试上限（首次＋3 次重试）与重试间隔（递增） */
+    private static final int MAX_FILE_ATTEMPTS = 4;
+    private static final long[] RETRY_DELAYS_MS = {2000, 5000, 10000};
 
     /** 下载串行执行（大文件 base64 解码吃内存，多本同时下只会互相拖慢） */
     private static final ExecutorService DL_EXEC = Executors.newSingleThreadExecutor();
@@ -272,10 +281,11 @@ public final class Bookstore {
 
     // ---------- 下载 ----------
     /**
-     * 在下载线程池里执行整本下载（串行排队）。流程：staging 落盘 → 逐文件验
-     * size+md5 → 整体装入 books 目录 → 注册缺失曲目。已在列表里的曲目若其
-     * 音频文件大小与清单一致（老用户预置副本迁移来的同一母带），音频跳过
-     * 不重下、只补文字侧文件。失败时 staging 自动清理、不注册、不动旧数据。
+     * 在下载线程池里执行整本下载（串行排队）。流程：staging 落盘（单文件失败
+     * 自动重试、已验过的文件跨次复用）→ 逐文件验 size+md5 → 逐文件合并装入
+     * books 目录 → 注册缺失曲目。已在列表里的曲目若其音频文件大小与清单一致
+     * （老用户预置副本迁移来的同一母带），音频跳过不重下、只补文字侧文件。
+     * 失败时不注册、不动 books 目录与旧数据，staging 保留供下次续下。
      */
     public static void downloadBookAsync(final Context ctx, final Book book,
                                          final ProgressListener pl) {
@@ -303,57 +313,97 @@ public final class Bookstore {
         Store store = Store.get(ctx);
         List<TrackSpec> specs = trackSpecs(book);
         File staging = stagingDir(ctx, book.id);
-        deleteRecursive(staging);
-        if (!staging.mkdirs() && !staging.exists()) throw new Exception("无法创建下载目录");
+        // v1.14.1：不再一上来就删 staging（旧版开头与失败时都整目录删除——任何
+        // 一次中途断流＝整本作废、下次从零开始；十几 MB 的单个响应经 VPN 绕路
+        // 反复中途死，正是「总是下到一半停」的成因）。跨失败保留，靠下面的
+        // size+md5 复查区分「已下好」与「半截」，半截文件不会误当成品。
+        if (!staging.exists() && !staging.mkdirs() && !staging.exists()) {
+            throw new Exception("无法创建下载目录");
+        }
 
-        // 决定每个文件下不下：音频若已有同尺寸的曲目文件（迁移副本）在，不重下
+        // 分拣：音频若已有同尺寸的曲目文件（迁移副本）在，不重下；在 staging
+        // 里已验过（size+md5）的文件计入进度基线、直接复用；其余排队下载。
+        // 总字节口径＝本次要落盘的全部文件（复用＋待下），进度不从 0 起。
         List<PackFile> toFetch = new ArrayList<>();
         long total = 0;
+        final long[] done = {0};
         for (PackFile pf : book.files) {
             if ("audio".equals(pf.role) && existingAudioMatches(store, specs, pf)) continue;
-            toFetch.add(pf);
             total += pf.size;
+            if (verifyStagedFile(pf, new File(staging, pf.path))) {
+                done[0] += pf.size;
+            } else {
+                toFetch.add(pf);
+            }
         }
         final long totalBytes = total;
-        final long[] done = {0};
-        // chunkPl 收到的是每段解码字节数（增量），累加即整本进度
+        if (pl != null) pl.onProgress(Math.min(done[0], totalBytes), totalBytes);
+        // chunkPl 收到的是每段解码字节数（增量），累加即整本进度；本次尝试的
+        // 增量单独记账，尝试失败时从总进度回退（那截随重下作废，不重复计）
+        final long[] attemptDelta = {0};
         ProgressListener chunkPl = pl == null ? null : new ProgressListener() {
             @Override
             public void onProgress(long d, long t) {
                 done[0] += d;
+                attemptDelta[0] += d;
                 pl.onProgress(Math.min(done[0], totalBytes), totalBytes);
             }
 
             @Override
             public void onDone(boolean ok, String error) {
             }
+
+            @Override
+            public void onFileRetry(String path, int attempt, int maxAttempts, String reason) {
+            }
         };
-        try {
-            for (PackFile pf : toFetch) {
-                File dest = new File(staging, pf.path);
-                if (dest.getParentFile() != null) dest.getParentFile().mkdirs();
-                MessageDigest md = MessageDigest.getInstance("MD5");
-                long written = downloadContentsFile(book.repo, pf.path, dest, md, chunkPl);
-                if (written != pf.size) {
-                    throw new Exception(pf.path + " 大小不对（" + written + "/" + pf.size + "）");
+
+        for (PackFile pf : toFetch) {
+            File dest = new File(staging, pf.path);
+            if (dest.getParentFile() != null) dest.getParentFile().mkdirs();
+            Exception last = null;
+            for (int attempt = 1; attempt <= MAX_FILE_ATTEMPTS; attempt++) {
+                if (attempt > 1) {
+                    if (pl != null) {
+                        pl.onFileRetry(pf.path, attempt, MAX_FILE_ATTEMPTS, readableError(last));
+                    }
+                    sleepRetry(RETRY_DELAYS_MS[attempt - 2]);
                 }
-                if (pf.md5 != null && !pf.md5.equalsIgnoreCase(hex(md.digest()))) {
-                    throw new Exception(pf.path + " 校验失败（md5 不符）");
+                attemptDelta[0] = 0;
+                try {
+                    MessageDigest md = MessageDigest.getInstance("MD5");
+                    long written = downloadContentsFile(book.repo, pf.path, dest, md, chunkPl);
+                    if (written != pf.size) {
+                        throw new Exception(pf.path + " 大小不对（" + written + "/" + pf.size + "）");
+                    }
+                    if (pf.md5 != null && !pf.md5.equalsIgnoreCase(hex(md.digest()))) {
+                        throw new Exception(pf.path + " 校验失败（md5 不符）");
+                    }
+                    last = null;
+                    break;
+                } catch (Exception e) {
+                    last = e;
+                    done[0] = Math.max(0, done[0] - attemptDelta[0]);
+                    if (pl != null) pl.onProgress(Math.min(done[0], totalBytes), totalBytes);
                 }
             }
-        } catch (Exception e) {
-            deleteRecursive(staging);
-            throw e;
+            if (last != null) {
+                // staging 原样保留：已验过的文件不删，用户再点下载从本文件续起
+                throw new Exception(pf.path + " 下载失败（已重试 " + MAX_FILE_ATTEMPTS
+                        + " 次）：" + readableError(last));
+            }
         }
 
-        // 装入：替换 books/<bookId>（旧的半成品/旧包先删，staging 整体改名移入）
+        // 装入：逐文件合并移入 books/<bookId>。旧版是整目录替换——staging 里没有
+        // 被 existingAudioMatches 跳过的音频（迁移副本在 books 目录外另存）；当
+        // 一本书有部分曲目被用户从列表删过时，仍在列表中的曲目音频会被整目录
+        // 替换连带删掉而条目保留，书静默损坏。合并装入只覆盖 staging 里有的文件。
         File target = bookDir(ctx, book.id);
-        deleteRecursive(target);
-        if (target.getParentFile() != null) target.getParentFile().mkdirs();
-        if (!staging.renameTo(target)) {
-            copyRecursive(staging, target);
-            deleteRecursive(staging);
+        if (!target.exists() && !target.mkdirs() && !target.exists()) {
+            throw new Exception("无法创建书籍目录");
         }
+        moveRecursive(staging, target);
+        deleteRecursive(staging);
 
         // 注册缺失曲目（已在列表的一律不动：位置、进度、改过的名字都保留）
         int insertAt = -1;
@@ -378,6 +428,61 @@ public final class Bookstore {
         }
         if (changed) store.saveTracks();
         ContentRepo.invalidate(book.id);
+    }
+
+    /** v1.14.1：staging 里的文件是否已完整下好（大小对得上且 md5 对得上；
+     *  清单无 md5 时只看大小）。半截/损坏文件一律判否、排队重下 */
+    private static boolean verifyStagedFile(PackFile pf, File f) {
+        try {
+            if (f == null || !f.isFile() || f.length() != pf.size) return false;
+            if (pf.md5 == null) return true;
+            return pf.md5.equalsIgnoreCase(md5OfFile(f));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String md5OfFile(File f) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("MD5");
+        FileInputStream in = new FileInputStream(f);
+        try {
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+        } finally {
+            in.close();
+        }
+        return hex(md.digest());
+    }
+
+    /** v1.14.1：把 src 逐文件移入 dst（同卷 rename，失败退化为拷贝＋删源）；
+     *  dst 里 staging 没有的文件原样保留（合并装入，见 downloadBook 装入段） */
+    private static void moveRecursive(File src, File dst) throws Exception {
+        if (src.isDirectory()) {
+            if (!dst.exists() && !dst.mkdirs() && !dst.exists()) {
+                throw new Exception("无法创建目录 " + dst.getName());
+            }
+            File[] kids = src.listFiles();
+            if (kids != null) for (File k : kids) moveRecursive(k, new File(dst, k.getName()));
+            return;
+        }
+        if (dst.getParentFile() != null && !dst.getParentFile().exists()) {
+            dst.getParentFile().mkdirs();
+        }
+        if (dst.exists() && !dst.delete()) throw new Exception("无法替换旧文件 " + dst.getName());
+        if (!src.renameTo(dst)) {
+            copyRecursive(src, dst);
+            src.delete();
+        }
+    }
+
+    private static void sleepRetry(long ms) throws Exception {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Exception("下载被中断");
+        }
     }
 
     /** 已有曲目（按规格 id）的文件大小与清单一致 → 这段音频不用重下 */
@@ -464,7 +569,12 @@ public final class Bookstore {
                 + "?access_token=" + URLEncoder.encode(token, "UTF-8") + "&ref=master";
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(15000);
-        c.setReadTimeout(120000);
+        // v1.14.1：读超时 120s → 30s，兼作「看门狗」——HttpURLConnection 的读
+        // 超时按每次 read 调用计：连续 30 秒没有任何新字节到达即抛
+        // SocketTimeoutException 断开当前文件（由 downloadBook 的单文件重试
+        // 接住重下）。旧版 120s 下细流假活/中途死连接要干等两分钟才失败，
+        // 且失败即整本作废，用户看到的就是「下到一半停住不动」。
+        c.setReadTimeout(30000);
         c.setRequestProperty("User-Agent", "Shixi-Android");
         int code = c.getResponseCode();
         if (code != 200) {

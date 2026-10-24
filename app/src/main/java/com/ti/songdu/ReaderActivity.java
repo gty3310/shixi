@@ -646,7 +646,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     }
 
     private void applyLoop() {
-        if (PlayerService.instance != null) PlayerService.instance.loopEnabled = loopOn;
+        // v1.14.1：走 setLoopEnabled（字段＋reader_prefs/loop 持久化一并写，
+        // 与总设置页「单曲循环」开关同一份口径）
+        if (PlayerService.instance != null) PlayerService.instance.setLoopEnabled(loopOn);
     }
 
     // ---------- 轮询：当前句高亮/跟随 + 播放栏状态 ----------

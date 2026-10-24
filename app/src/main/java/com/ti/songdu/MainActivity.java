@@ -9,6 +9,7 @@ import android.content.ClipboardManager;
 import android.content.ClipDescription;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Typeface;
@@ -83,6 +84,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private final Map<String, View> groupHeaderViews = new HashMap<>();
     /** 组名 → 当前可见的组内行（篇行＋可能的提示行，按显示顺序；重排子视图用） */
     private final Map<String, java.util.List<View>> groupRowViews = new HashMap<>();
+    /** v1.14.1：拖拽中已投递待执行的视图重排（合并多次 ENTERED 只排一次，见 postRebuildChildOrder） */
+    private boolean dragRebuildPosted = false;
     private boolean showingCalendar = false;
 
     // 文件选择用经典 startActivityForResult（零第三方依赖）
@@ -185,22 +188,15 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             }
         });
 
-        // v1.4 播放条上拉手柄：单击或上滑打开当前播放音频的阅读页
+        // 播放条展开手柄：单击打开当前播放音频的阅读页
         // （只走手势检测器：单击在 onSingleTapUp 里消费掉 UP 事件，不再叠加 click，
         //   避免打开两次阅读页、也避免冒泡到播放条的播放/暂停点击）
+        // v1.14.1：按用户要求取消「上拉展开字幕」手势——原 onFling（在手柄上
+        // 快速上滑也打开阅读页）已摘除，手柄只保留单击这一个入口；
+        // 卡片/篇行上的「阅读」钮、悬浮半圆钮长按等其他进阅读页的入口不变。
         View expandHandle = findViewById(R.id.btnExpandReader);
         final android.view.GestureDetector gd = new android.view.GestureDetector(this,
                 new android.view.GestureDetector.SimpleOnGestureListener() {
-                    @Override
-                    public boolean onFling(android.view.MotionEvent e1, android.view.MotionEvent e2,
-                                           float velocityX, float velocityY) {
-                        if (e1 != null && e2 != null && e1.getY() - e2.getY() > 40 && velocityY < -300) {
-                            openReaderForCurrent();
-                            return true;
-                        }
-                        return false;
-                    }
-
                     @Override
                     public boolean onSingleTapUp(android.view.MotionEvent e) {
                         openReaderForCurrent();
@@ -1261,7 +1257,36 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             }
         }
         listContainer.removeAllViews();
-        for (View v : ordered) listContainer.addView(v);
+        java.util.Set<View> seen = java.util.Collections.newSetFromMap(
+                new java.util.IdentityHashMap<>());
+        for (View v : ordered) {
+            // v1.14.1 防护：同一个视图对象只许加一次。万一数据异常（如一组被
+            // 拆成两截、两截共用同一组头/行视图），宁可少显示一行，也不要让
+            // addView 抛「child already has a parent」直接闪退
+            if (seen.add(v)) listContainer.addView(v);
+        }
+    }
+
+    /**
+     * v1.14.1 闪退修复（用户报「每次改变不同经典的顺序时直接闪退」）：
+     * 旧版在 ACTION_DRAG_ENTERED 回调里同步 rebuildChildOrder——removeAllViews
+     * 再逐个 addView。可是这个回调正跑在框架的拖拽分发调用栈里
+     * （ViewGroup.dispatchDragEvent 正在遍历子视图分发同一次拖拽事件），
+     * 分发途中增删子视图会让框架的分发状态失效，新版 Android 上必崩；
+     * 而不改变顺序的拖动走的是提前返回分支、根本不重排，所以现象恰好是
+     * 「一改变顺序就闪退」。数据层逻辑本身没有问题（下标计算与组边界吸附
+     * 已经桌面模糊测试 2 万余次事件验证：不越界、不拆组、不重复）。
+     * 修法：回调里只改数据顺序（后续 ENTERED 的目标判定只看 tag 与数据、
+     * 不看视图位置，立即改是安全的），视图重排 post 到消息队列——当前
+     * 分发一结束就执行，用户无感知。
+     */
+    private void postRebuildChildOrder() {
+        if (dragRebuildPosted) return;
+        dragRebuildPosted = true;
+        listContainer.post(() -> {
+            dragRebuildPosted = false;
+            rebuildChildOrder();
+        });
     }
 
     /** 卡片与组头共用的拖拽监听：进入某个条目时，把被拖单元整块挪到它之前/之后 */
@@ -1293,7 +1318,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 copy.addAll(snapped, moving);
                 store.tracks.clear();
                 store.tracks.addAll(copy);
-                rebuildChildOrder();
+                // v1.14.1：不在拖拽分发回调里同步重排视图（闪退根因，见
+                // postRebuildChildOrder 的说明），延迟到分发结束执行
+                postRebuildChildOrder();
                 return true;
             }
             case DragEvent.ACTION_DRAG_ENDED:
@@ -1307,38 +1334,84 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         }
     };
 
-    // ---------- v1.12.0 卡片阅读数（总设置页「卡片阅读数」选时段，键 reader_prefs/cardStat） ----------
-    private String cardStatKey() {
-        return getSharedPreferences("reader_prefs", MODE_PRIVATE)
-                .getString("cardStat", "today");
+    // ---------- 卡片阅读数（v1.12.0 单选 → v1.14.1 多选，总设置页勾选） ----------
+    /** 时段键的规范顺序（设置页勾选与卡面显示共用此序） */
+    static final String[] CARD_STAT_KEYS = {
+            "today", "yesterday", "daybefore", "week", "lastweek", "month", "lastmonth", "total"};
+
+    /** v1.14.1 默认勾选：今日、昨日、上周、本月、上月 */
+    private static boolean isDefaultCardStat(String k) {
+        return "today".equals(k) || "yesterday".equals(k) || "lastweek".equals(k)
+                || "month".equals(k) || "lastmonth".equals(k);
     }
 
-    private static String cardStatLabel(String key) {
+    /**
+     * 当前生效的勾选集合（设置页与卡面共用同一口径）：
+     * 新键 reader_prefs/cardStats（字符串集合）优先；老用户只有 v1.12.0 的
+     * 单选键 cardStat 时，迁移为只含该项的集合（不丢已有设置）；都没有时
+     * 用默认五项。返回的是可安全读取的副本。
+     */
+    static Set<String> cardStatSelection(SharedPreferences p) {
+        Set<String> out = new HashSet<>();
+        if (p.contains("cardStats")) {
+            Set<String> s = p.getStringSet("cardStats", null);
+            if (s != null) out.addAll(s);
+            return out;
+        }
+        if (p.contains("cardStat")) {
+            out.add(p.getString("cardStat", "today"));
+            return out;
+        }
+        for (String k : CARD_STAT_KEYS) if (isDefaultCardStat(k)) out.add(k);
+        return out;
+    }
+
+    /** 勾选的时段键按规范顺序排成列表；全不勾时兜底只显示今日（卡面不留空白） */
+    private List<String> cardStatKeys() {
+        Set<String> sel = cardStatSelection(getSharedPreferences("reader_prefs", MODE_PRIVATE));
+        List<String> out = new ArrayList<>();
+        for (String k : CARD_STAT_KEYS) if (sel.contains(k)) out.add(k);
+        if (out.isEmpty()) out.add("today");
+        return out;
+    }
+
+    static String cardStatLabel(String key) {
         switch (key) {
             case "yesterday": return "昨日";
             case "daybefore": return "前日";
             case "week": return "本周";
+            case "lastweek": return "上周";
             case "month": return "本月";
-            case "total": return "总";
+            case "lastmonth": return "上月";
+            case "total": return "总计";
             default: return "今日";
         }
     }
 
-    /** 取数全部走 Store 既有分书分时段口径（前日＝trackCountOn 的前天，与昨日同一原语） */
+    /** 取数全部走 Store 既有分书分时段口径（前日＝trackCountOn 的前天，与昨日同一原语；
+     *  上周/上月用 Store 既有的 trackLastWeek/trackLastMonth，与复制文本同口径） */
     private int cardStatCount(Track t, String key) {
         switch (key) {
             case "yesterday": return store.trackYesterday(t);
             case "daybefore": return store.trackCountOn(t.id, Store.today().minusDays(2));
             case "week": return store.trackThisWeek(t);
+            case "lastweek": return store.trackLastWeek(t);
             case "month": return store.trackThisMonth(t);
+            case "lastmonth": return store.trackLastMonth(t);
             case "total": return store.trackTotal(t);
             default: return store.trackToday(t);
         }
     }
 
+    /** 小字行：所有勾选时段按规范顺序以「 · 」连接，如「今日 2 遍 · 昨日 1 遍 · 上周 0 遍」。
+     *  卡片小字行与篇行统计的 TextView 都不设单行限制，长串自动换行显示、不截断 */
     private String cardStatText(Track t) {
-        String key = cardStatKey();
-        return cardStatLabel(key) + " " + cardStatCount(t, key) + " 遍";
+        StringBuilder sb = new StringBuilder();
+        for (String k : cardStatKeys()) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(cardStatLabel(k)).append(' ').append(cardStatCount(t, k)).append(" 遍");
+        }
+        return sb.toString();
     }
 
     private void bindCard(View card, Track t) {
@@ -1359,7 +1432,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         title.setText(t.title);
         duration.setText(Store.fmtDurationAt(t.durationMs, store.speed));
         todayCount.setText(String.valueOf(store.trackToday(t)));
-        // v1.12.0：小字行只显示总设置页选定的那个时段（带口径标签，如「今日 3 遍」）
+        // v1.14.1：小字行显示总设置页勾选的全部时段（带口径标签，如「今日 3 遍 · 上周 1 遍」）
         subCounts.setText(cardStatText(t));
         updateCardProgress(card, t);
 

@@ -109,9 +109,15 @@ public class PlayerService extends Service {
     private boolean restarting = false;
     public Track current;
     public boolean playing = false;
-    /** v1.4 阅读页的单曲循环开关：默认 true，与 v1.0–v1.3 的行为完全一致（播完计遍后自动重播）；
-     *  关掉时播完只计数、不重播，停在结尾（位置已清零，再按播放从头播） */
+    /** v1.4 阅读页的单曲循环开关：默认 true，与 v1.0–v1.3 的行为完全一致（播完计遍后自动重播）。
+     *  v1.14.1：进总设置页（「播放」组）；持久化沿用阅读页既有的
+     *  reader_prefs/loop（v1.4 起就在用的键，不另起一份免得两处打架），
+     *  读写统一走 setLoopEnabled，onCreate 恢复。关掉时播完计数后自动接
+     *  列表顺序的下一本，最后一本读完才停（见 advanceToNextTrack） */
     public boolean loopEnabled = true;
+    /** v1.14.1：单曲循环开关的持久化口径（与 ReaderActivity 的 prefs/loop 同一份） */
+    private static final String LOOP_PREFS = "reader_prefs";
+    private static final String KEY_LOOP_SINGLE = "loop";
     /** v1.4 点句播放的待执行 seek：playTrackAt 在 prepare 完成前先记下，onPrepared 时消费；
      *  带 trackId 校验，防止中途切歌后把旧位置 seek 到新曲目上 */
     private long pendingSeekMs = -1;
@@ -654,7 +660,8 @@ public class PlayerService extends Service {
     /**
      * 跟读下的一遍播完：计数 +1（与 onCompletion 旧路径同口径），位置清零；
      * 循环开 → 全量重建从头播，播起来后状态机自动从第一句重新跟读；
-     * 循环关 → 停在结尾，阶段回 IDLE，跟读开关保持开。
+     * 循环关 → v1.14.1 起自动接列表顺序的下一本（没有下一本才停在结尾），
+     * 阶段回 IDLE，跟读开关保持开。
      */
     private void finishFollowPass() {
         if (current != null) {
@@ -668,7 +675,9 @@ public class PlayerService extends Service {
         followGapPaused = false;
         if (loopEnabled) {
             replayFromStart();
-        } else {
+        } else if (!advanceToNextTrack()) {
+            // v1.14.1：跟读下循环关同样自动接下一本（playTrack 内部已复位跟读
+            // 状态机、无原文则自动关跟读）；没有下一本才停，跟读开关保持开
             playing = false;
         }
         updateNotification();
@@ -725,6 +734,9 @@ public class PlayerService extends Service {
         // v1.7：恢复每段字数（默认 15；0＝整句）
         followChunkChars = getSharedPreferences(FOLLOW_PREFS, MODE_PRIVATE)
                 .getInt("chunkChars", 15);
+        // v1.14.1：恢复单曲循环开关（默认开＝v1.4 以来的现行行为）
+        loopEnabled = getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .getBoolean(KEY_LOOP_SINGLE, true);
         if (followEnabled) startFollowLoop();
         createChannel();
         initSession();
@@ -776,6 +788,31 @@ public class PlayerService extends Service {
             }
         });
         session.setActive(true);
+    }
+
+    /** v1.14.1：单曲循环开关（总设置页／阅读页共用）：改字段＋持久化，下次冷启动恢复 */
+    public void setLoopEnabled(boolean on) {
+        loopEnabled = on;
+        getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .edit().putBoolean(KEY_LOOP_SINGLE, on).apply();
+    }
+
+    /**
+     * v1.14.1：循环关时一本读完自动接下一本——按列表顺序取下一曲并播放，
+     * 成功返回 true；当前已是最后一曲（或找不到当前曲）返回 false，调用方停下。
+     * 与手动 skip 的区别：不绕回开头。计数在调用前已完成，本方法只管切歌；
+     * 新曲按 playTrack 既有口径从它上次的位置续播。
+     */
+    private boolean advanceToNextTrack() {
+        if (current == null) return false;
+        for (int i = 0; i < store.tracks.size(); i++) {
+            if (store.tracks.get(i).id.equals(current.id)) {
+                if (i + 1 >= store.tracks.size()) return false;
+                playTrack(store.tracks.get(i + 1));
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 上一首/下一首：按列表顺序切歌（单曲循环仍是默认，切歌只来自用户手动操作） */
@@ -893,7 +930,10 @@ public class PlayerService extends Service {
                 if (listener != null) listener.onCountChanged();
             }
             if (!loopEnabled) {
-                // v1.4：循环关——计完这一遍就停，不重播（默认开，旧行为不变）
+                // v1.14.1：循环关不再是 v1.4 的「计完这一遍就停」——计数已在上方
+                // 完成（口径不变），自动接列表顺序的下一本；最后一本读完才停。
+                // 默认开的行为完全不变。
+                if (advanceToNextTrack()) return;
                 playing = false;
                 updateNotification();
                 notifyState();

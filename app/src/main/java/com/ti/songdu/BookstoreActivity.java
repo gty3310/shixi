@@ -45,6 +45,9 @@ public class BookstoreActivity extends Activity {
     }
 
     private final Map<String, RowViews> rowViews = new HashMap<>();
+    /** v1.14.1：每本书最近一次下载的最终失败原因——持久显示在该书行内
+     *  （旧版只有一闪而过的 Toast，失败了也看不出为什么、在哪停的） */
+    private final Map<String, String> lastErrors = new HashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -334,10 +337,21 @@ public class BookstoreActivity extends Activity {
             rv.action.setOnClickListener(v -> startDownload(b));
             rv.delete.setVisibility(View.VISIBLE);
         }
+        // v1.14.1：有未清除的失败原因时覆盖状态行（朱砂色），说明停在哪个文件、
+        // 已下好的部分保留、再点按钮接着下；下载成功或重新开始下载时清除
+        String err = lastErrors.get(b.id);
+        if (err != null && !st.isDownloaded()) {
+            rv.status.setText("下载失败：" + err + "。已下好的文件保留，再点「"
+                    + rv.action.getText() + "」会接着下。");
+            rv.status.setTextColor(getColor(R.color.accent));
+        } else {
+            rv.status.setTextColor(getColor(R.color.muted));
+        }
     }
 
     private void startDownload(final Bookstore.Book b) {
         final RowViews rv = rowViews.get(b.id);
+        lastErrors.remove(b.id); // 重新开始下载：旧失败原因清除
         if (rv != null) refreshRow(b, rv);
         Bookstore.downloadBookAsync(this, b, new Bookstore.ProgressListener() {
             @Override
@@ -354,9 +368,25 @@ public class BookstoreActivity extends Activity {
             }
 
             @Override
+            public void onFileRetry(final String path, final int attempt,
+                                    final int maxAttempts, final String reason) {
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    RowViews r = rowViews.get(b.id);
+                    if (r == null) return;
+                    // 进度长时间不动时这里给出状态变化：正在重试哪个文件、第几次
+                    r.progress.setVisibility(View.VISIBLE);
+                    r.status.setText("网络中断，正在重试 " + fileBase(path)
+                            + "（第 " + attempt + "/" + maxAttempts + " 次）…");
+                });
+            }
+
+            @Override
             public void onDone(final boolean ok, final String error) {
                 runOnUiThread(() -> {
                     if (isFinishing()) return;
+                    if (ok) lastErrors.remove(b.id);
+                    else lastErrors.put(b.id, error != null ? error : "网络异常");
                     Toast.makeText(BookstoreActivity.this,
                             ok ? "《" + b.title + "》下载完成" : "下载失败：" + error,
                             Toast.LENGTH_LONG).show();
@@ -389,6 +419,12 @@ public class BookstoreActivity extends Activity {
             return;
         }
         Toast.makeText(this, "这本书还没有下载完整", Toast.LENGTH_SHORT).show();
+    }
+
+    private static String fileBase(String path) {
+        if (path == null) return "";
+        int i = path.lastIndexOf('/');
+        return i >= 0 ? path.substring(i + 1) : path;
     }
 
     private String fmtSize(long bytes) {
