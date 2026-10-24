@@ -341,8 +341,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     /**
      * v1.11.0 按总设置页的显隐键（reader_prefs show*Btn，默认全显示）设第二排
      * 按钮 visibility。藏钮只藏入口：功能状态本身照常生效（如默认竖排仍是竖排、
-     * 注释开着仍开着），用户回设置把钮打开即可继续操作。唯一例外是跟读——
-     * 正在跟读时把「跟读」钮藏掉会让用户无处退出，故先退出跟读模式再藏钮
+     * 注释开着仍开着），用户回设置把钮打开即可继续操作。例外是跟读与识读——
+     * 正在进行时把钮藏掉会让用户无处退出，故先退出该模式再藏钮
      * （防困死）。onCreate 与 onResume 各调一次，设置改完回来即生效。
      */
     private void applyButtonVisibility() {
@@ -372,6 +372,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             }
         }
         btnRFollow.setVisibility(showFollow ? View.VISIBLE : View.GONE);
+        boolean showRecite = prefs.getBoolean("showReciteBtn", true);
+        if (!showRecite && reciteOn) stopRecite(); // 防困死：同跟读，藏钮前先停识读
+        btnRRecite.setVisibility(showRecite ? View.VISIBLE : View.GONE);
     }
 
     /** v1.9.0 注释开关钮呈现：与跟读钮同口径（开＝朱砂实心 pill＋白字加粗，关＝无底浅字） */

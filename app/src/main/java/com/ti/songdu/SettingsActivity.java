@@ -124,6 +124,8 @@ public class SettingsActivity extends Activity {
                 chunkIdx, idx -> setChunkChars(chunkVals[idx]));
         addShowRow(root, "跟读", "showFollowBtn");
 
+        addShowRow(root, "识读", "showReciteBtn");
+
         addSegRow(root, "注释版本", new String[]{"张居正", "朱熹"},
                 "jizhu".equals(readerPrefs.getString("notesVer", "zhijie")) ? 1 : 0,
                 idx -> readerPrefs.edit()
