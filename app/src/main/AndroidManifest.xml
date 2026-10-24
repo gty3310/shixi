@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- v1.14.0 在线书库：从 Gitee 私有仓拉目录与下载书籍文件 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- v1.10.0 悬浮播放控件：在其他应用上层显示半圆钮/字幕卡（需用户在系统设置里授权一次） -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
@@ -29,6 +31,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".BookstoreActivity"
+            android:exported="false"
+            android:label="添加书籍" />
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />

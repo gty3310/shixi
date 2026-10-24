@@ -199,6 +199,12 @@ public class ContentRepo {
         }
     }
 
+    /** v1.14.0：让某本书的缓存失效（书库整本下载完成 / 删书后调用，下次 load 重新读盘） */
+    public static synchronized void invalidate(String bookId) {
+        CACHE.remove(bookId);
+        if ("lunyu".equals(bookId)) lunyuDoc = null;
+    }
+
     /** v1.8.2 删除用户导入内容包（删曲目时一并清理，不留孤儿文件） */
     public static void deleteUserBook(Context ctx, String bookId) {
         try {
@@ -225,8 +231,10 @@ public class ContentRepo {
                 if (n <= 0) return null;
                 raw = new String(buf, 0, n, StandardCharsets.UTF_8);
             } catch (Exception assetMiss) {
-                // v1.8.2：assets 没有时回退到用户导入内容包（内部存储）
-                java.io.File f = userContentFile(ctx, bookId);
+                // v1.14.0：assets 没有时先回退到在线书库下载包（files/books/<id>/content/），
+                // 再回退到 v1.8.2 的用户导入内容包（内部存储 usercontent）
+                java.io.File f = Bookstore.contentFile(ctx, bookId);
+                if (!f.exists()) f = userContentFile(ctx, bookId);
                 if (!f.exists()) return null;
                 java.io.FileInputStream in = new java.io.FileInputStream(f);
                 byte[] buf = new byte[in.available()];
@@ -315,8 +323,20 @@ public class ContentRepo {
             in.close();
             if (n <= 0) return false;
             raw = new String(buf, 0, n, StandardCharsets.UTF_8);
-        } catch (Exception noNotes) {
-            return false;
+        } catch (Exception noAsset) {
+            // v1.14.0：注文件也可来自在线书库下载包（如《中庸》两家注随书下载）
+            try {
+                java.io.File f = Bookstore.notesFile(ctx, b.bookId);
+                if (!f.exists()) return false;
+                java.io.FileInputStream in = new java.io.FileInputStream(f);
+                byte[] buf = new byte[in.available()];
+                int n = in.read(buf);
+                in.close();
+                if (n <= 0) return false;
+                raw = new String(buf, 0, n, StandardCharsets.UTF_8);
+            } catch (Exception noNotes) {
+                return false;
+            }
         }
         try {
             JSONObject notes = new JSONObject(raw);

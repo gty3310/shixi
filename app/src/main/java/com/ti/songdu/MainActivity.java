@@ -57,6 +57,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
     private Store store;
 
+    /** v1.14.0：书库页「我愿意自己上传」回跳标记——带此 extra 回到主页时打开本地导入弹窗 */
+    public static final String EXTRA_OPEN_ADD = "open_add_dialog";
+
     private TextView tvDate, tvEmpty;
     private TextView nowTitle, nowPos, nowDur, btnBarToggle;
     /** v1.11.0 播放器栏「悬浮字幕」钮（状态靠样式，见 refreshOverlayBtn） */
@@ -105,6 +108,12 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         setContentView(R.layout.activity_main);
         store = Store.get(this);
         store.installPresetsIfNeeded(); // v1.3：首次启动释放两个预置完整版音频（只做一次）
+        store.migrateBookstoreIfNeeded(); // v1.14.0：老用户的中庸/论语预置副本原地转为「已下载的书」（只做一次）
+        // v1.14.0：从书库页「我愿意自己上传」回跳时直接打开本地导入弹窗
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_OPEN_ADD, false)) {
+            getIntent().removeExtra(EXTRA_OPEN_ADD);
+            showAddBookDialog();
+        }
 
         tvDate = findViewById(R.id.tvDate);
         tvEmpty = findViewById(R.id.tvEmpty);
@@ -132,7 +141,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 today.getYear(), today.getMonthValue(), today.getDayOfMonth(),
                 WEEKDAYS[today.getDayOfWeek().getValue() - 1]));
 
-        findViewById(R.id.btnAdd).setOnClickListener(v -> showAddBookDialog());
+        // v1.14.0：「添加书籍」改开书库页（线上目录下载＋自传入口）；本地导入弹窗由书库页回调用
+        findViewById(R.id.btnAdd).setOnClickListener(
+                v -> startActivity(new Intent(this, BookstoreActivity.class)));
         findViewById(R.id.btnHelp).setOnClickListener(v -> startActivity(
                 new Intent(this, HelpActivity.class)));
         findViewById(R.id.btnSettings).setOnClickListener(v -> startActivity(
@@ -870,6 +881,12 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     }
 
     public void onDelete(Track t) {
+        // v1.14.0：书库下载的书按整本删（确认框为定案文案：只删文件、记录保留）
+        String storeBookId = Bookstore.bookIdOfTrack(t);
+        if (storeBookId != null) {
+            Bookstore.confirmDeleteBook(this, storeBookId, this::refreshAll);
+            return;
+        }
         new AlertDialog.Builder(this)
                 .setTitle("移除音频")
                 .setMessage("把" + t.title + "从列表移除？\n它过去的播放记录会保留在日历统计里。")
@@ -1711,6 +1728,17 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     @Override
     public void onCountChanged() {
         runOnUiThread(this::refreshAll);
+    }
+
+    /** v1.14.0：主页是 singleTop——从书库页带 EXTRA_OPEN_ADD 回跳时走这里 */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && intent.getBooleanExtra(EXTRA_OPEN_ADD, false)) {
+            intent.removeExtra(EXTRA_OPEN_ADD);
+            showAddBookDialog();
+        }
     }
 
     @Override

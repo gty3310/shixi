@@ -26,8 +26,24 @@ $BT/aapt2 link -o $B/base.apk -I $AJAR \
   --java $B/gen \
   -A $SRC/assets \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 26 --version-name 1.13.0 \
+  --version-code 27 --version-name 1.14.0 \
   $B/compiled.zip
+
+echo "[2.5/6] gen StoreSecrets（书库令牌：只进 build 目录，永不入库）"
+if [ -f store_token.txt ]; then
+  TOK=$(tr -d '[:space:]' < store_token.txt | tr -d '"\\')
+else
+  TOK=""
+fi
+mkdir -p $B/gen/com/ti/songdu
+cat > $B/gen/com/ti/songdu/StoreSecrets.java <<EOF
+package com.ti.songdu;
+// 构建时由 build-manual.sh 从 store_token.txt 生成；源文件在 build 目录内，永不提交。
+public final class StoreSecrets {
+    public static final String GITEE_TOKEN = "$TOK";
+    private StoreSecrets() {}
+}
+EOF
 
 echo "[3/6] javac"
 find $SRC/java $B/gen -name '*.java' > $B/sources.txt

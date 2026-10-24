@@ -67,6 +67,9 @@ public class Store {
      *  此值小于当前 versionCode，要把已有预置曲目的音频强制重新释放一遍
      *  （见 refreshPresetAudioIfUpgraded） */
     public int presetsAudioVersion = 0;
+    /** v1.14.0：老用户的中庸/论语预置副本是否已原地转为「已下载的书」（只做一次，
+     *  持久化在 settings.json 的 bookstoreMigrated；见 migrateBookstoreIfNeeded） */
+    public boolean bookstoreMigrated = false;
 
     public Store(Context ctx) {
         this.ctx = ctx.getApplicationContext();
@@ -173,6 +176,8 @@ public class Store {
                 }
                 // v1.8.3 迁移：旧 settings 无 presetsAudioVersion → 默认 0，下次启动必然触发一次刷新
                 presetsAudioVersion = o.optInt("presetsAudioVersion", 0);
+                // v1.14.0 迁移：旧 settings 无 bookstoreMigrated → 默认 false，启动时补做一次
+                bookstoreMigrated = o.optBoolean("bookstoreMigrated", false);
                 JSONArray p = o.optJSONArray("copyPeriods");
                 if (p != null) {
                     for (int i = 0; i < p.length(); i++) copyPeriods.add(p.getString(i));
@@ -229,6 +234,7 @@ public class Store {
             for (String id : presetsInstalled) piArr.put(id);
             o.put("presetsInstalled", piArr);
             o.put("presetsAudioVersion", presetsAudioVersion);
+            o.put("bookstoreMigrated", bookstoreMigrated);
             JSONArray p = new JSONArray();
             for (String k : PERIOD_KEYS) if (copyPeriods.contains(k)) p.put(k);
             o.put("copyPeriods", p);
@@ -243,31 +249,15 @@ public class Store {
         return null;
     }
 
-    // ---------- 预置音频（v1.3 完整版 / v1.5 论语按篇） ----------
-    /** 预置曲目规格：{稳定 id, 显示名称, res/raw 资源, 内部存储文件名, 分组(可为 null)} */
+    // ---------- 预置音频（v1.3 完整版 / v1.5 论语按篇 / v1.14.0 只剩《大学》） ----------
+    /** 预置曲目规格：{稳定 id, 显示名称, res/raw 资源, 内部存储文件名, 分组(可为 null)}
+     *  v1.14.0 瘦身：APK 只内置《大学》；《中庸》《论语》改为在线书库下载（Bookstore），
+     *  它们的曲目 id（preset-zhongyong-full / preset-lunyu-NN）由书库沿用，records
+     *  按 id 绑定不受影响。本表只剩大学一条：增量补装与随版本刷新都不会再碰中庸/论语，
+     *  更不会把它们以预置身份加回。老设备上已有的中庸/论语预置副本经
+     *  migrateBookstoreIfNeeded() 原地转为「已下载的书」（分类变更，文件与记录不动）。 */
     private static final Object[][] PRESETS = {
-            {"preset-daxue-full", "《大学》", R.raw.preset_daxue_full, "daxue-full.mp3", null},
-            {"preset-zhongyong-full", "《中庸》", R.raw.preset_zhongyong_full, "zhongyong-full.mp3", null},
-            {"preset-lunyu-01", "學而第一", R.raw.lunyu_01, "lunyu-01.mp3", "论语"},
-            {"preset-lunyu-02", "為政第二", R.raw.lunyu_02, "lunyu-02.mp3", "论语"},
-            {"preset-lunyu-03", "八佾第三", R.raw.lunyu_03, "lunyu-03.mp3", "论语"},
-            {"preset-lunyu-04", "里仁第四", R.raw.lunyu_04, "lunyu-04.mp3", "论语"},
-            {"preset-lunyu-05", "公冶長第五", R.raw.lunyu_05, "lunyu-05.mp3", "论语"},
-            {"preset-lunyu-06", "雍也第六", R.raw.lunyu_06, "lunyu-06.mp3", "论语"},
-            {"preset-lunyu-07", "述而第七", R.raw.lunyu_07, "lunyu-07.mp3", "论语"},
-            {"preset-lunyu-08", "泰伯第八", R.raw.lunyu_08, "lunyu-08.mp3", "论语"},
-            {"preset-lunyu-09", "子罕第九", R.raw.lunyu_09, "lunyu-09.mp3", "论语"},
-            {"preset-lunyu-10", "鄉黨第十", R.raw.lunyu_10, "lunyu-10.mp3", "论语"},
-            {"preset-lunyu-11", "先進第十一", R.raw.lunyu_11, "lunyu-11.mp3", "论语"},
-            {"preset-lunyu-12", "顏淵第十二", R.raw.lunyu_12, "lunyu-12.mp3", "论语"},
-            {"preset-lunyu-13", "子路第十三", R.raw.lunyu_13, "lunyu-13.mp3", "论语"},
-            {"preset-lunyu-14", "憲問第十四", R.raw.lunyu_14, "lunyu-14.mp3", "论语"},
-            {"preset-lunyu-15", "衛靈公第十五", R.raw.lunyu_15, "lunyu-15.mp3", "论语"},
-            {"preset-lunyu-16", "季氏第十六", R.raw.lunyu_16, "lunyu-16.mp3", "论语"},
-            {"preset-lunyu-17", "陽貨第十七", R.raw.lunyu_17, "lunyu-17.mp3", "论语"},
-            {"preset-lunyu-18", "微子第十八", R.raw.lunyu_18, "lunyu-18.mp3", "论语"},
-            {"preset-lunyu-19", "子張第十九", R.raw.lunyu_19, "lunyu-19.mp3", "论语"},
-            {"preset-lunyu-20", "堯曰第二十", R.raw.lunyu_20, "lunyu-20.mp3", "论语"}
+            {"preset-daxue-full", "《大学》", R.raw.preset_daxue_full, "daxue-full.mp3", null}
     };
 
     /**
@@ -403,6 +393,30 @@ public class Store {
             presetsAudioVersion = vc;
             saveSettings();
         }
+    }
+
+    /**
+     * v1.14.0 老用户迁移（只做一次，MainActivity 启动时在 installPresetsIfNeeded 后调用）：
+     * 设备上已有的《中庸》《论语》预置副本（曲目在、来源还是「内置音频」）原地转为
+     * 「已下载的书」——文件不删、不移、不改内容，只把来源标记改成「在线书库」，
+     * 归类就此与书库下载的书一致：书库页显示已下载、删书走书库的删法。records.json
+     * 一律不动（遍数按曲目 id 绑定，本来也不受分类影响）。新装用户没有这些曲目，
+     * 本方法只置标记。注意：迁移副本的文字包原本只在旧 APK 的 assets 里、新版已
+     * 不带——书库页会显示「还缺文字包」，点「补全」即可只补文字侧小文件（音频与
+     * 清单同尺寸、同母带，不重下）。 */
+    public synchronized void migrateBookstoreIfNeeded() {
+        if (bookstoreMigrated) return;
+        boolean changed = false;
+        for (Track t : tracks) {
+            if (t == null || t.id == null) continue;
+            if (!"preset-zhongyong-full".equals(t.id) && !t.id.startsWith("preset-lunyu-")) continue;
+            if (!"内置音频".equals(t.sourceName)) continue;
+            t.sourceName = "在线书库";
+            changed = true;
+        }
+        bookstoreMigrated = true;
+        saveSettings();
+        if (changed) saveTracks();
     }
 
     /** 本地文件的时长（预置音频释放后读取；content:// 曲目的时长读取在 MainActivity 里） */
