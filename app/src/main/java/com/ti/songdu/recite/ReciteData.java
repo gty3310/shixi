@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * v1.16.0-dev 识读：一本书的「期望音节流」＋小句切分（纯 Java，可桌面单测）。
+ * v1.16.0 识读：一本书的「期望音节流」＋小句切分（纯 Java，可桌面单测）。
  *
  * 输入是与 ContentRepo 解耦的句子记录（id / 繁体文本 / 简体文本 / 逐字带调拼音 /
  * breakPos 句内可停标点在 textT 中的 UTF-16 下标），Android 侧由 ReciteSession
