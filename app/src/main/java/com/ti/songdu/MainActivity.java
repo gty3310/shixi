@@ -156,7 +156,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 if (!fromUser) return;
                 PlayerService svc = PlayerService.instance;
                 if (svc != null && svc.current != null && svc.current.durationMs > 0) {
-                    nowPos.setText(Store.fmtTime(svc.current.durationMs * progress / 1000));
+                    nowPos.setText(Store.fmtTimeAt(svc.current.durationMs * progress / 1000, store.speed));
                 }
             }
 
@@ -1129,9 +1129,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         l2.topMargin = dp(5);
         line2.setLayoutParams(l2);
         TextView stats = new TextView(this);
-        stats.setText(String.format("%s · 今日 %d · 昨日 %d · 本周 %d · 上周 %d · 本月 %d",
-                Store.fmtDuration(ct.durationMs), store.trackToday(ct), store.trackYesterday(ct),
-                store.trackThisWeek(ct), store.trackLastWeek(ct), store.trackThisMonth(ct)));
+        stats.setText(String.format("%s · %s",
+                Store.fmtDurationAt(ct.durationMs, store.speed), cardStatText(ct)));
         stats.setTextSize(12.5f);
         stats.setTextColor(getColor(R.color.muted));
         stats.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -1291,6 +1290,40 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         }
     };
 
+    // ---------- v1.12.0 卡片阅读数（总设置页「卡片阅读数」选时段，键 reader_prefs/cardStat） ----------
+    private String cardStatKey() {
+        return getSharedPreferences("reader_prefs", MODE_PRIVATE)
+                .getString("cardStat", "today");
+    }
+
+    private static String cardStatLabel(String key) {
+        switch (key) {
+            case "yesterday": return "昨日";
+            case "daybefore": return "前日";
+            case "week": return "本周";
+            case "month": return "本月";
+            case "total": return "总";
+            default: return "今日";
+        }
+    }
+
+    /** 取数全部走 Store 既有分书分时段口径（前日＝trackCountOn 的前天，与昨日同一原语） */
+    private int cardStatCount(Track t, String key) {
+        switch (key) {
+            case "yesterday": return store.trackYesterday(t);
+            case "daybefore": return store.trackCountOn(t.id, Store.today().minusDays(2));
+            case "week": return store.trackThisWeek(t);
+            case "month": return store.trackThisMonth(t);
+            case "total": return store.trackTotal(t);
+            default: return store.trackToday(t);
+        }
+    }
+
+    private String cardStatText(Track t) {
+        String key = cardStatKey();
+        return cardStatLabel(key) + " " + cardStatCount(t, key) + " 遍";
+    }
+
     private void bindCard(View card, Track t) {
         card.setTag(t.id); // 拖拽排序按 tag 定位曲目区间（见 unitOfView）
         TextView title = card.findViewById(R.id.tvTitle);
@@ -1307,12 +1340,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         TextView btnPlus = card.findViewById(R.id.btnPlus);
 
         title.setText(t.title);
-        duration.setText(Store.fmtDuration(t.durationMs));
+        duration.setText(Store.fmtDurationAt(t.durationMs, store.speed));
         todayCount.setText(String.valueOf(store.trackToday(t)));
-        // 昨日 / 本周 / 上周 / 本月：只有实际遍数，没有目标总数（与通知里的统计串同一口径）
-        subCounts.setText(String.format("昨日 %d 遍 · 本周 %d 遍 · 上周 %d 遍 · 本月 %d 遍",
-                store.trackYesterday(t), store.trackThisWeek(t),
-                store.trackLastWeek(t), store.trackThisMonth(t)));
+        // v1.12.0：小字行只显示总设置页选定的那个时段（带口径标签，如「今日 3 遍」）
+        subCounts.setText(cardStatText(t));
         updateCardProgress(card, t);
 
         boolean isCurrent = PlayerService.instance != null
@@ -1380,7 +1411,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         } else {
             progress.setProgress(0);
         }
-        lastPos.setText("上次听到 " + Store.fmtTime(t.positionMs));
+        lastPos.setText("上次听到 " + Store.fmtTimeAt(t.positionMs, store.speed));
     }
 
     // ---------- 速度 ----------
@@ -1404,7 +1435,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                     store.speed = val;
                     store.saveSettings();
                 }
-                refreshSpeedChips();
+                // v1.12.0：倍速一改，卡片时长与播放条时长当下就按新倍速重渲
+                refreshAll();
             });
             speedChips.add(chip);
             speedRow.addView(chip);
@@ -1475,10 +1507,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             nowTitle.setText((svc.playing ? "正在循环播放 · " : "已暂停 · ") + cur.title);
         }
         btnBarToggle.setText(svc.playing ? "❚❚" : "▶");
-        nowDur.setText(Store.fmtTime(cur.durationMs));
+        nowDur.setText(Store.fmtTimeAt(cur.durationMs, store.speed));
         long pos = svc.currentPosition();
         if (!userSeeking) {
-            nowPos.setText(Store.fmtTime(pos));
+            nowPos.setText(Store.fmtTimeAt(pos, store.speed));
             if (cur.durationMs > 0)
                 playerSeek.setProgress((int) Math.min(1000, pos * 1000 / cur.durationMs));
         }

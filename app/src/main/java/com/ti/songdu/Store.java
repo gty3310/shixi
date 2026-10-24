@@ -752,4 +752,25 @@ public class Store {
         if (s >= 60) return (s / 60) + " 分 " + (s % 60) + " 秒";
         return s + " 秒";
     }
+
+    /**
+     * v1.12.0 显示换算口径：显示的时长＝原始毫秒 ÷ 当前倍速、四舍五入到秒，
+     * 表示「按这个倍速实际要听的时间」；倍速 1.0 时原样返回，与旧显示逐字一致。
+     * 只许用于显示文本——seek 目标、跟读判定、计数、内容包时间轴等功能性数值
+     * 一律用原始值，禁止经此换算。
+     */
+    public static long scaledMs(long ms, float speed) {
+        if (speed <= 0f || Math.abs(speed - 1f) < 0.001f) return ms;
+        return Math.round(ms / (double) speed / 1000.0) * 1000L;
+    }
+
+    /** 按倍速换算后的位置/总时长文本（格式同 fmtTime） */
+    public static String fmtTimeAt(long ms, float speed) {
+        return fmtTime(scaledMs(ms, speed));
+    }
+
+    /** 按倍速换算后的时长文本（格式同 fmtDuration） */
+    public static String fmtDurationAt(long ms, float speed) {
+        return fmtDuration(scaledMs(ms, speed));
+    }
 }

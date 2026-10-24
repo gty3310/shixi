@@ -22,6 +22,8 @@ import android.widget.Toast;
 /**
  * v1.11.0 总设置页：集中管理每项功能的「默认状态」与「阅读页按钮显示与否」，
  * 以及悬浮字幕的显示意愿、启动行为、透明度与权限。
+ * v1.12.0 增「卡片阅读数」组：主页卡片小字行显示哪个时段的阅读数
+ * （reader_prefs/cardStat：today/yesterday/daybefore/week/month/total，默认 today）。
  *
  * 口径（用户定）：
  *  - 与阅读页/主页共用同一份偏好：阅读默认与显隐写 reader_prefs、跟读分段写
@@ -110,6 +112,46 @@ public class SettingsActivity extends Activity {
                 idx -> readerPrefs.edit()
                         .putString("notesVer", idx == 1 ? "jizhu" : "zhijie").apply());
         addShowRow(root, "注释", "showNotesBtn");
+
+        addDivider(root);
+
+        // ---------- 卡片阅读数组（v1.12.0） ----------
+        addGroupTitle(root, "卡片阅读数");
+        TextView statHint = new TextView(this);
+        statHint.setText("主页每本书卡片上显示哪个时段的阅读数，就在这里选。");
+        statHint.setTextSize(13);
+        statHint.setTextColor(getColor(R.color.muted));
+        statHint.setPadding(0, dp(2), 0, dp(2));
+        root.addView(statHint);
+        final String[] statKeys = {"today", "yesterday", "daybefore", "week", "month", "total"};
+        final String[] statLabels = {"今日", "昨日", "前日", "本周", "本月", "总"};
+        String curStat = readerPrefs.getString("cardStat", "today");
+        int statIdx = 0;
+        for (int i = 0; i < statKeys.length; i++) {
+            if (statKeys[i].equals(curStat)) statIdx = i;
+        }
+        LinearLayout statRow = rowLine();
+        final TextView[] statChips = new TextView[statLabels.length];
+        for (int i = 0; i < statLabels.length; i++) {
+            final int idx = i;
+            TextView chip = new TextView(this);
+            chip.setText(statLabels[i]);
+            chip.setTextSize(13);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(4), dp(6), dp(4), dp(6));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            if (i > 0) lp.leftMargin = dp(6);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(v -> {
+                styleChips(statChips, idx);
+                readerPrefs.edit().putString("cardStat", statKeys[idx]).apply();
+            });
+            statChips[i] = chip;
+            statRow.addView(chip);
+        }
+        styleChips(statChips, statIdx);
+        root.addView(statRow);
 
         addDivider(root);
 
