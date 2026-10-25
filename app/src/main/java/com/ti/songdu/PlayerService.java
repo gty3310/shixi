@@ -11,6 +11,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
+import android.content.res.AssetFileDescriptor;
 import android.media.MediaPlayer;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -122,6 +123,13 @@ public class PlayerService extends Service {
      *  带 trackId 校验，防止中途切歌后把旧位置 seek 到新曲目上 */
     private long pendingSeekMs = -1;
     private String pendingSeekTrackId = null;
+
+    // ---------- v1.17.0 双声音（《大学》法师原声 / AI 朗读） ----------
+    /** 当前已加载音频的声音（双声音曲目才有意义）：playTrack/switchVoice 装载时定，
+     *  onPrepared 据此与 pos_voice 对账做跨时间轴位置映射 */
+    private String activeVoice = VoicePref.VOICE_ORIG;
+    /** 切声重载后保持暂停（切声前是暂停态时置真）：onPrepared 消费一次，不自动开播 */
+    private boolean holdAfterPrepare = false;
 
     // ---------- v1.4.3 跟读模式 ----------
     public static final int FOLLOW_IDLE = 0;
@@ -269,7 +277,7 @@ public class PlayerService extends Service {
                 current.positionMs = pos;
                 store.saveTracks();
                 if (listener != null)
-                    listener.onProgress(current.id, pos, current.durationMs);
+                    listener.onProgress(current.id, pos, effDurationMs());
             } catch (Exception ignored) {
             }
         }
@@ -843,7 +851,7 @@ public class PlayerService extends Service {
                     .putString(MediaMetadata.METADATA_KEY_ARTIST, stats)
                     .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, stats)
                     .putString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION, stats)
-                    .putLong(MediaMetadata.METADATA_KEY_DURATION, current.durationMs)
+                    .putLong(MediaMetadata.METADATA_KEY_DURATION, effDurationMs())
                     .build());
         }
         long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
@@ -886,21 +894,44 @@ public class PlayerService extends Service {
             preparing = false;
             boolean wasRestart = restarting;
             restarting = false;
+            // v1.17.0：存量位置若属于另一声音的时间轴（切过声、或换声后冷启），
+            // 先按句映射到本次装载声音的轴上再续播，并把位置归属改记为本轴
+            if (current != null && !wasRestart && VoicePref.appliesTo(this, current)) {
+                String bid = ContentRepo.bookIdFor(current);
+                String pv = VoicePref.getPosVoice(this, bid);
+                if (!pv.equals(activeVoice)) {
+                    ContentRepo.Book fromB = ContentRepo.bookForVoice(this, current, pv);
+                    ContentRepo.Book toB = ContentRepo.bookForVoice(this, current, activeVoice);
+                    current.positionMs = ContentRepo.mapPosition(
+                            fromB, toB, current.positionMs);
+                    store.saveTracks();
+                }
+                VoicePref.setPosVoice(this, bid, activeVoice);
+            }
+            long effDur = effDurationMs();
             if (current != null && pendingSeekMs >= 0 && current.id.equals(pendingSeekTrackId)) {
                 // v1.4 点句播放：优先跳到指定句的位置（clamp 到时长内，留 500ms 余量防直接播完）
                 long start = pendingSeekMs;
-                if (current.durationMs > 0)
-                    start = Math.min(start, Math.max(0, current.durationMs - 500));
+                if (effDur > 0)
+                    start = Math.min(start, Math.max(0, effDur - 500));
                 if (start > 0) p.seekTo((int) start);
                 current.positionMs = start;
             } else if (current != null && !wasRestart) {
                 // 普通点播/续播才跳到上次位置；重播（restarting）位置已清零，从头播
                 long start = current.positionMs;
-                if (current.durationMs > 0 && start >= current.durationMs - 1000) start = 0;
+                if (effDur > 0 && start >= effDur - 1000) start = 0;
                 if (start > 0) p.seekTo((int) start);
             }
             pendingSeekMs = -1;
             pendingSeekTrackId = null;
+            if (holdAfterPrepare) {
+                // v1.17.0：切声前是暂停态——装载就位但不开播，位置停在映射后的句首
+                holdAfterPrepare = false;
+                playing = false;
+                updateNotification();
+                notifyState();
+                return;
+            }
             requestFocus();
             applySpeed(); // 每次 start 前重新应用倍速（completion/reset 后参数会失效）
             p.start();
@@ -954,13 +985,101 @@ public class PlayerService extends Service {
         });
     }
 
-    /** 按曲目来源类型设置数据源：file（预置音频）走内部存储绝对路径，content 走 content:// URI */
+    /** 按曲目来源类型设置数据源：file（预置音频）走内部存储绝对路径，content 走 content:// URI；
+     *  v1.17.0：双声音曲目已选 AI 朗读时改播 assets 里的 AI 音轨（openFd 偏移直读，
+     *  不落盘复制；该 mp3 在 APK 内未压缩存储，构建后已核） */
     private void setDataSourceFor(MediaPlayer p, Track t) throws Exception {
+        if (useAiAudio(t)) {
+            String bid = ContentRepo.bookIdFor(t);
+            AssetFileDescriptor afd = getAssets().openFd(VoicePref.aiAudioAsset(bid));
+            try {
+                p.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+            } finally {
+                afd.close();
+            }
+            return;
+        }
         if (t.isFile()) {
             p.setDataSource(t.uri);
         } else {
             p.setDataSource(getApplicationContext(), Uri.parse(t.uri));
         }
+    }
+
+    /** v1.17.0 这条曲目当下应播 AI 音轨否：双声音预置曲目且偏好已选 AI */
+    private boolean useAiAudio(Track t) {
+        return t != null && VoicePref.appliesTo(this, t)
+                && VoicePref.VOICE_AI.equals(
+                        VoicePref.getVoice(this, ContentRepo.bookIdFor(t)));
+    }
+
+    /** v1.17.0 当前播放口径的总时长：播 AI 音轨时是 AI 书的基准时长，
+     *  其余即曲目自身时长。进度条/会话元数据/seek 钳制都用它，别用错轴 */
+    public long effDurationMs() {
+        if (current == null) return 0;
+        if (useAiAudio(current)) {
+            ContentRepo.Book b = ContentRepo.loadAi(this, ContentRepo.bookIdFor(current));
+            if (b != null && b.audioDurationMs > 0) return b.audioDurationMs;
+        }
+        return current.durationMs;
+    }
+
+    /**
+     * v1.17.0 切换某本书的朗读声音（选声页/设置页调用）：写偏好；若正装载的正是
+     * 这本书的预置曲目且声音有变——按句把当前位置映射到新时间轴、换音轨重载，
+     * 保持原播放/暂停态；跟读段轴作废重建（新轴由 bookForTrack 按新偏好生成）。
+     * 服务没在播这本书时只写偏好，下次播放自然生效。
+     */
+    public void switchVoice(String bookId, String voice) {
+        if (bookId == null || voice == null) return;
+        VoicePref.setVoice(this, bookId, voice);
+        if (current == null || !bookId.equals(ContentRepo.bookIdFor(current))
+                || !VoicePref.appliesTo(this, current)) return;
+        if (voice.equals(activeVoice)) return;
+        Track t = current;
+        ContentRepo.Book oldBook = ContentRepo.bookForVoice(this, t, activeVoice);
+        ContentRepo.Book newBook = ContentRepo.bookForVoice(this, t, voice);
+        long newPos = ContentRepo.mapPosition(oldBook, newBook, currentPosition());
+        boolean wasPlaying = playing;
+        activeVoice = voice;
+        VoicePref.setPosVoice(this, bookId, voice);
+        current.positionMs = newPos;
+        // 跟读段轴失效（保留开关态），状态机下个 tick 按新时间轴重建并接上
+        foTrackId = null;
+        foStart = null;
+        foEnd = null;
+        foStop = null;
+        foFirst = null;
+        foLast = null;
+        foStartU16 = null;
+        foEndU16 = null;
+        followPhase = FOLLOW_IDLE;
+        followIndex = -1;
+        followGapPaused = false;
+        followFinishGuard = false;
+        pendingSeekMs = newPos;
+        pendingSeekTrackId = t.id;
+        holdAfterPrepare = !wasPlaying;
+        ensurePlayer();
+        restarting = false;
+        try {
+            mp.reset();
+            configurePlayer(mp);
+        } catch (Exception ignored) {
+        }
+        prepared = false;
+        preparing = true;
+        playing = false;
+        try {
+            setDataSourceFor(mp, t);
+            mp.prepareAsync();
+        } catch (Exception e) {
+            preparing = false;
+            holdAfterPrepare = false;
+        }
+        store.saveTracks();
+        updateNotification();
+        notifyState();
     }
 
     /** 播完一遍后的重播：reset → 重设唤醒/属性 → setDataSource → prepareAsync，
@@ -985,6 +1104,12 @@ public class PlayerService extends Service {
 
     public void playTrack(Track t) {
         if (t == null) return;
+        // v1.17.0 首播选声门：双声音书尚未选过 → 任何入口都先拉选声页，
+        // 选定后由选声页重新发起播放，本次不装载、不出声（不许绕过）
+        if (VoicePref.needsChoice(this, t)) {
+            VoiceChoiceActivity.openForPlay(this, t, -1);
+            return;
+        }
         if (current != null && current.id.equals(t.id) && prepared) {
             if (!playing) {
                 requestFocus();
@@ -1010,6 +1135,9 @@ public class PlayerService extends Service {
         preparing = true;
         current = t;
         playing = false;
+        // v1.17.0：本次装载的声音定下来（数据源与 onPrepared 的位置对账都看它）
+        activeVoice = useAiAudio(t) ? VoicePref.VOICE_AI : VoicePref.VOICE_ORIG;
+        holdAfterPrepare = false;
         // v1.4.3：切歌复位跟读（新曲有原文则播起来后自动接上，无原文自动关）
         resetFollowForNewTrack();
         try {
@@ -1029,6 +1157,11 @@ public class PlayerService extends Service {
      */
     public void playTrackAt(Track t, long posMs) {
         if (t == null) return;
+        // v1.17.0 首播选声门（点句起读同理）：未选过先去选声页，选定后按原句位续播
+        if (VoicePref.needsChoice(this, t)) {
+            VoiceChoiceActivity.openForPlay(this, t, posMs);
+            return;
+        }
         if (current != null && current.id.equals(t.id) && prepared) {
             if (mp != null) {
                 seekToPosition(posMs);
@@ -1129,13 +1262,13 @@ public class PlayerService extends Service {
     /** 拖动进度条 seek 到绝对位置：clamp 到 [0, 时长-1]，拖到末尾不触发计遍（只有自然播完才计） */
     public void seekToPosition(long posMs) {
         if (mp == null || !prepared || current == null) return;
-        long dur = current.durationMs > 0 ? current.durationMs : Long.MAX_VALUE;
+        long dur = effDurationMs() > 0 ? effDurationMs() : Long.MAX_VALUE;
         long target = Math.max(0, Math.min(posMs, dur == Long.MAX_VALUE ? posMs : dur - 1));
         try {
             mp.seekTo((int) target);
             current.positionMs = target;
             store.saveTracks();
-            if (listener != null) listener.onProgress(current.id, target, current.durationMs);
+            if (listener != null) listener.onProgress(current.id, target, effDurationMs());
             syncSession();
             // v1.4.3：跟读中 seek 后按落点重新同步当前句（gap 中的 seek 亦取消等待）
             resyncFollowAfterSeek(target);

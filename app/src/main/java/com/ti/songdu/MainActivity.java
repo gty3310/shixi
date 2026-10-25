@@ -182,8 +182,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 if (!fromUser) return;
                 PlayerService svc = PlayerService.instance;
-                if (svc != null && svc.current != null && svc.current.durationMs > 0) {
-                    nowPos.setText(Store.fmtTimeAt(svc.current.durationMs * progress / 1000, store.speed));
+                if (svc != null && svc.current != null && svc.effDurationMs() > 0) {
+                    nowPos.setText(Store.fmtTimeAt(svc.effDurationMs() * progress / 1000, store.speed));
                 }
             }
 
@@ -191,8 +191,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             public void onStopTrackingTouch(SeekBar sb) {
                 userSeeking = false;
                 PlayerService svc = PlayerService.instance;
-                if (svc != null && svc.current != null && svc.current.durationMs > 0) {
-                    long target = svc.current.durationMs * sb.getProgress() / 1000;
+                if (svc != null && svc.current != null && svc.effDurationMs() > 0) {
+                    long target = svc.effDurationMs() * sb.getProgress() / 1000;
                     Intent i = new Intent(MainActivity.this, PlayerService.class)
                             .setAction(PlayerService.ACTION_SEEK_TO)
                             .putExtra(PlayerService.EXTRA_SEEK_POS, target);
@@ -1798,12 +1798,14 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             nowTitle.setText((svc.playing ? "正在循环播放 · " : "已暂停 · ") + cur.title);
         }
         btnBarToggle.setText(svc.playing ? "❚❚" : "▶");
-        nowDur.setText(Store.fmtTimeAt(cur.durationMs, store.speed));
+        // v1.17.0：总时长/进度按当前声音口径（AI 音轨时长与原声不同）
+        long effDur = svc.effDurationMs();
+        nowDur.setText(Store.fmtTimeAt(effDur, store.speed));
         long pos = svc.currentPosition();
         if (!userSeeking) {
             nowPos.setText(Store.fmtTimeAt(pos, store.speed));
-            if (cur.durationMs > 0)
-                playerSeek.setProgress((int) Math.min(1000, pos * 1000 / cur.durationMs));
+            if (effDur > 0)
+                playerSeek.setProgress((int) Math.min(1000, pos * 1000 / effDur));
         }
     }
 

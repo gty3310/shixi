@@ -1278,7 +1278,28 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         PlayerService.listener = this;
         applyLoop();
         applyButtonVisibility(); // 设置页可能刚改过显隐，回来即生效
+        refreshBookForVoice();
         handler.post(poll);
+    }
+
+    /** v1.17.0：朗读声音可能刚在选声页/设置里切换过——解析到的 Book 声音与
+     *  本页装载的不同就整页换轴（时间轴、缩放、高亮基线全部重建），
+     *  免得页面停在旧声音的时间表上与正在播的音轨对不上 */
+    private void refreshBookForVoice() {
+        if (track == null || book == null) return;
+        ContentRepo.Book nb = ContentRepo.bookForTrack(this, track);
+        if (nb == null || nb.voice.equals(book.voice)) return;
+        book = nb;
+        scale = ContentRepo.scaleFor(track, book);
+        buildTimeline();
+        hasNotes = false;
+        for (ContentRepo.Sentence s : book.flat) {
+            if (s.noteZj != null || s.noteJz != null) { hasNotes = true; break; }
+        }
+        curSentence = -1;
+        curClause = -1;
+        web.loadDataWithBaseURL(null, buildHtml(), "text/html", "UTF-8", null);
+        pushMarksToWeb();
     }
 
     @Override

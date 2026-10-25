@@ -74,6 +74,9 @@ public class ContentRepo {
         public String bookId;
         public String title;
         public long audioDurationMs;
+        /** v1.17.0 本 Book 的时间轴所属声音："orig" 原声（默认）/ "ai" AI 朗读。
+         *  AI 书与原声书同 bookId、同句 id、文本一致，只是时间轴各自实测 */
+        public String voice = VoicePref.VOICE_ORIG;
         public final List<Chapter> chapters = new ArrayList<>();
         /** 全部句子按阅读顺序拉平（与 chapters 内顺序一致），下标即阅读页的句序号 */
         public final List<Sentence> flat = new ArrayList<>();
@@ -136,7 +139,15 @@ public class ContentRepo {
     public static Book bookForTrack(Context ctx, Track t) {
         String bid = bookIdFor(t);
         if (bid == null) return null;
-        if (!"lunyu".equals(bid)) return load(ctx, bid);
+        if (!"lunyu".equals(bid)) {
+            // v1.17.0：双声音书的预置曲目按已选声音取时间轴（AI 书加载失败回退原声）
+            if (VoicePref.VOICE_AI.equals(VoicePref.getVoice(ctx, bid))
+                    && VoicePref.appliesTo(ctx, t)) {
+                Book ai = loadAi(ctx, bid);
+                if (ai != null) return ai;
+            }
+            return load(ctx, bid);
+        }
         int idx = lunyuChapterIndex(t);
         if (idx < 0) return null;
         Book full = load(ctx, "lunyu");
@@ -202,6 +213,7 @@ public class ContentRepo {
     /** v1.14.0：让某本书的缓存失效（书库整本下载完成 / 删书后调用，下次 load 重新读盘） */
     public static synchronized void invalidate(String bookId) {
         CACHE.remove(bookId);
+        CACHE.remove(bookId + "#ai"); // v1.17.0：AI 时间轴缓存一并失效
         if ("lunyu".equals(bookId)) lunyuDoc = null;
     }
 
@@ -243,8 +255,52 @@ public class ContentRepo {
                 if (n <= 0) return null;
                 raw = new String(buf, 0, n, StandardCharsets.UTF_8);
             }
+            if ("lunyu".equals(bookId)) {
+                try {
+                    lunyuDoc = new JSONObject(raw);
+                } catch (Exception ignored) {
+                }
+            }
+            Book b = parseBook(ctx, raw);
+            if (b == null) return null;
+            CACHE.put(bookId, b);
+            return b;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * v1.17.0 AI 朗读时间轴：assets/audio_ai/<bookId>_ai.json，与原声包同结构、
+     * 同句 id、文本一致，时间轴为 AI 音轨的实测值。缓存键 bookId+"#ai" 与原声
+     * 分开；解析与挂注走 parseBook 同一套（句 id 相同，注释照常挂得上）。
+     */
+    public static synchronized Book loadAi(Context ctx, String bookId) {
+        if (bookId == null) return null;
+        String key = bookId + "#ai";
+        Book cached = CACHE.get(key);
+        if (cached != null) return cached;
+        try {
+            InputStream in = ctx.getAssets().open("audio_ai/" + bookId + "_ai.json");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] tmp = new byte[8192];
+            int n;
+            while ((n = in.read(tmp)) > 0) bos.write(tmp, 0, n);
+            in.close();
+            Book b = parseBook(ctx, new String(bos.toByteArray(), StandardCharsets.UTF_8));
+            if (b == null) return null;
+            b.voice = VoicePref.VOICE_AI;
+            CACHE.put(key, b);
+            return b;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 内容包 JSON → Book：解析章节/句子、挂注释、定 rawJson（load 与 loadAi 共用） */
+    private static Book parseBook(Context ctx, String raw) {
+        try {
             JSONObject o = new JSONObject(raw);
-            if ("lunyu".equals(bookId)) lunyuDoc = o;
             Book b = new Book();
             b.bookId = o.getString("bookId");
             b.title = o.optString("title", "");
@@ -299,11 +355,48 @@ public class ContentRepo {
             if (attachNotes(ctx, b, sentObjs)) {
                 b.rawJson = o.toString();
             }
-            CACHE.put(bookId, b);
             return b;
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * v1.17.0 按指定声音取曲目的 Book（不看当前偏好，供切声时同时拿新旧两条
+     * 时间轴做位置映射）：AI 只对双声音预置曲目成立，其余一律原声口径。
+     * 论语走 bookForTrack 的按篇逻辑（无双声音）。
+     */
+    public static Book bookForVoice(Context ctx, Track t, String voice) {
+        String bid = bookIdFor(t);
+        if (bid == null) return null;
+        if ("lunyu".equals(bid)) return bookForTrack(ctx, t);
+        if (VoicePref.VOICE_AI.equals(voice) && VoicePref.appliesTo(ctx, t)) {
+            Book ai = loadAi(ctx, bid);
+            if (ai != null) return ai;
+        }
+        return load(ctx, bid);
+    }
+
+    /**
+     * v1.17.0 位置跨声音映射：from 时间轴里 posMs 落在哪句（最后一个 start<=pos
+     * 的有声句），返回 to 时间轴里同一句（按句 id 对齐）的 startMs；
+     * 定位不到返回 0（从头）。切声保持当前句、冷启动续播换轴都走这里。
+     */
+    public static long mapPosition(Book from, Book to, long posMs) {
+        if (from == null || to == null) return 0;
+        // 注意不能对 posMs<=0 早退：AI 轴首句 startMs 就是 0，0 点属于首句，
+        // 要映到对方轴的首句句首（原声首句前有片头静音，startMs>0）
+        Sentence hit = null;
+        for (Sentence s : from.flat) {
+            if (s.noAudio || s.startMs < 0) continue;
+            if (s.startMs <= posMs) hit = s;
+            else break; // 内容包时间单调，越过即停
+        }
+        if (hit == null) return 0;
+        for (Sentence s : to.flat) {
+            if (s.id.equals(hit.id)) return Math.max(0, s.startMs);
+        }
+        return 0;
     }
 
     /**
@@ -393,9 +486,12 @@ public class ContentRepo {
         }
     }
 
-    /** 句时间缩放系数：该音频实际时长 / 内容包基准时长（3 倍速版 ≈ 0.34，原速版 = 1） */
+    /** 句时间缩放系数：该音频实际时长 / 内容包基准时长（3 倍速版 ≈ 0.34，原速版 = 1）。
+     *  v1.17.0：AI 书的时间轴就是 AI 音轨自身的实测值（播的正是那条音轨），恒 1.0，
+     *  不拿曲目的原声时长去除 */
     public static double scaleFor(Track t, Book b) {
         if (t == null || b == null || b.audioDurationMs <= 0 || t.durationMs <= 0) return 1.0;
+        if (VoicePref.VOICE_AI.equals(b.voice)) return 1.0;
         return (double) t.durationMs / (double) b.audioDurationMs;
     }
 }

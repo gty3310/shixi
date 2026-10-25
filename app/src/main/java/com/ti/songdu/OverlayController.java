@@ -159,6 +159,8 @@ public class OverlayController {
     // v1.13.0 卡内容缓存：句轴按曲目缓存，内容键不变不重排版
     private ContentRepo.Book cardBook;
     private String cardTrackId;
+    /** v1.17.0 句轴缓存键（曲目 id＋已选声音）：切声后键变、句轴重建 */
+    private String cardVoiceKey;
     private long[] cardStarts;      // 与 cardFlatIdx 平行：有时间轴句的缩放后 startMs
     private int[] cardFlatIdx;
     private String cardKey = "";
@@ -884,16 +886,22 @@ public class OverlayController {
         return readerPrefsCache.getBoolean("trad", true);
     }
 
-    /** 句轴按曲目缓存：内容包＋缩放后的有时间句 startMs（与 ReaderActivity 同口径） */
+    /** 句轴按曲目缓存：内容包＋缩放后的有时间句 startMs（与 ReaderActivity 同口径）。
+     *  v1.17.0：缓存键带上已选声音——切声后同一曲目要换成另一条时间轴；
+     *  缩放统一走 ContentRepo.scaleFor（AI 书恒 1.0，不拿原声时长去除） */
     private void ensureCardBook(Track track) {
-        if (track.id != null && track.id.equals(cardTrackId)) return;
+        String bid = ContentRepo.bookIdFor(track);
+        String wantKey = String.valueOf(track.id) + "|"
+                + (bid != null && VoicePref.appliesTo(track)
+                        ? String.valueOf(VoicePref.getVoice(ctx, bid)) : "");
+        if (wantKey.equals(cardVoiceKey)) return;
+        cardVoiceKey = wantKey;
         cardTrackId = track.id;
         cardBook = ContentRepo.bookForTrack(ctx, track);
         cardStarts = null;
         cardFlatIdx = null;
         if (cardBook == null) return;
-        double scale = track.durationMs > 0 && cardBook.audioDurationMs > 0
-                ? (double) track.durationMs / cardBook.audioDurationMs : 1.0;
+        double scale = ContentRepo.scaleFor(track, cardBook);
         ArrayList<Long> st = new ArrayList<>();
         ArrayList<Integer> fl = new ArrayList<>();
         for (int i = 0; i < cardBook.flat.size(); i++) {

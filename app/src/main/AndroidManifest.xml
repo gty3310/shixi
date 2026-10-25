@@ -42,6 +42,12 @@
             android:name=".SettingsActivity"
             android:exported="false" />
 
+        <!-- v1.17.0 双声音选声页（首播门 / 设置重选共用） -->
+        <activity
+            android:name=".VoiceChoiceActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
         <activity
             android:name=".CopySettingsActivity"
             android:exported="false" />
