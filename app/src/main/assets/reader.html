@@ -111,22 +111,26 @@ function sentHTML(s){
   return '<span class="s' + (s.noAudio ? ' na' : '') + '" id="si' + s._i +
          '" data-i="' + s._i + '">' + out + '</span>';
 }
-/* ===== 注释（v1.9.0）=====
-   句子对象的 nt 字段由 ContentRepo 注入：nt.zj / nt.jz = {t 注文, a 块首拉平下标,
+/* ===== 注释（v1.9.0；v1.20.5 起三家）=====
+   句子对象的 nt 字段由 ContentRepo 注入：nt.zj / nt.jz / nt.gf = {t 注文, a 块首拉平下标,
    b 块末拉平下标}，是「覆盖本句的那一块」在该版本下的判定结果。显示时优先当前
-   选定版本（notesVer），该版本无块覆盖才回退另一家，页脚如实标实际显示的那家。
+   选定版本（notesVer），该版本无块覆盖才按固定次序回退其他家，页脚如实标实际显示的那家。
    古人按段注、块内每句共用此注，所以每句后面都挂同一块注（本节口径）。
    注块是句子 span 的同级后随元素（不在 .s 内部，不干扰小句拆分与点句 seek）。 */
+var NOTE_VER_KEYS = [['zhijie','zj'], ['jizhu','jz'], ['gengfu','gf']];
 function noteFor(s){
   if (!s || !s.nt) return null;
-  var k1 = notesVer === 'zhijie' ? 'zj' : 'jz';
-  var k2 = k1 === 'zj' ? 'jz' : 'zj';
-  if (s.nt[k1]) return {t:s.nt[k1].t, a:s.nt[k1].a, b:s.nt[k1].b, ver:k1};
-  if (s.nt[k2]) return {t:s.nt[k2].t, a:s.nt[k2].a, b:s.nt[k2].b, ver:k2};
+  var order = [];
+  NOTE_VER_KEYS.forEach(function(p){ if (p[0] === notesVer) order.push(p[1]); });
+  NOTE_VER_KEYS.forEach(function(p){ if (p[0] !== notesVer) order.push(p[1]); });
+  for (var i = 0; i < order.length; i++){
+    var n = s.nt[order[i]];
+    if (n) return {t:n.t, a:n.a, b:n.b, ver:order[i]};
+  }
   return null;
 }
 function noteFooter(n){
-  var lab = n.ver === 'zj' ? '张居正的版本' : '朱熹的版本';
+  var lab = n.ver === 'zj' ? '张居正的版本' : n.ver === 'jz' ? '朱熹的版本' : '耕夫讲经典';
   if (n.b > n.a) lab += ' · 本注管第 ' + (n.a + 1) + '–' + (n.b + 1) + ' 句';
   return lab;
 }

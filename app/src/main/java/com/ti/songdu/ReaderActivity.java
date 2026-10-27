@@ -118,7 +118,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private SharedPreferences prefs;
     private boolean useTrad, pinyinOn, vertical, loopOn;
     private int fontIdx;
-    /** v1.9.0 注释开关与选定版本（"zhijie" 张居正（默认） / "jizhu" 朱熹），独立持久化 */
+    /** v1.9.0 注释开关与选定版本（"zhijie" 张居正（默认） / "jizhu" 朱熹 / "gengfu" 耕夫讲经典（v1.20.5）），独立持久化 */
     private boolean notesOn;
     private String notesVer = "zhijie";
     /** 本书是否有注数据（仅《大学》《中庸》内容包在 ContentRepo 挂得上注） */
@@ -174,7 +174,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         scale = ContentRepo.scaleFor(track, book);
         buildTimeline();
         for (ContentRepo.Sentence s : book.flat) {
-            if (s.noteZj != null || s.noteJz != null) { hasNotes = true; break; }
+            if (s.noteZj != null || s.noteJz != null || s.noteGf != null) { hasNotes = true; break; }
         }
 
         prefs = getSharedPreferences("reader_prefs", MODE_PRIVATE);
@@ -414,7 +414,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     /**
      * v1.10.2 选版小窗：只在用户亲手点开「注释」时弹（页面重建恢复开态不走这里）。
-     * 两个版本各一块：标题＋一小行说明；上次所选带 ✓ 并高亮。点某一块即
+     * 三个版本各一块：标题＋一小行说明；上次所选带 ✓ 并高亮。点某一块即
      * 选定＋关窗＋开启注释（一步完成）；「取消」或点外关闭则保持关闭、什么都不改。
      */
     private void showNoteVerChooser() {
@@ -432,6 +432,12 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         root.addView(noteVerOption(density, "jizhu",
                 "朱熹《四书章句集注》",
                 "南宋朱熹的注本，八百年读书人的标准，文言短注、义理最全。适合文言有底子、想看原汁原味的人。"));
+        View gap2 = new View(this);
+        root.addView(gap2, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (int) (10 * density)));
+        root.addView(noteVerOption(density, "gengfu",
+                "耕夫讲经典",
+                "把《大学》逐句讲透的讲录整理，白话细密、处处落到修身做人。适合想听人把经文讲活、再对照自己日子的人。"));
         final AlertDialog[] dlg = new AlertDialog[1];
         for (int i = 0; i < root.getChildCount(); i++) {
             final View child = root.getChildAt(i);
@@ -495,20 +501,29 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         refreshNoteBar();
     }
 
-    /** 本句要显示的注：优先选定版本，无块覆盖才回退另一家；zjFlag[0] 回报实际用的哪家 */
-    private ContentRepo.NoteRef displayNote(ContentRepo.Sentence s, boolean[] zjFlag) {
-        boolean zjFirst = "zhijie".equals(notesVer);
-        ContentRepo.NoteRef first = zjFirst ? s.noteZj : s.noteJz;
-        if (first != null) {
-            zjFlag[0] = zjFirst;
-            return first;
-        }
-        ContentRepo.NoteRef second = zjFirst ? s.noteJz : s.noteZj;
-        if (second != null) {
-            zjFlag[0] = !zjFirst;
-            return second;
+    /** 本句要显示的注：优先选定版本，无块覆盖才按固定次序回退其他家；
+     *  usedVer[0] 回报实际用的哪家（"zhijie"/"jizhu"/"gengfu"） */
+    private ContentRepo.NoteRef displayNote(ContentRepo.Sentence s, String[] usedVer) {
+        String[] order;
+        if ("jizhu".equals(notesVer)) order = new String[]{"jizhu", "zhijie", "gengfu"};
+        else if ("gengfu".equals(notesVer)) order = new String[]{"gengfu", "zhijie", "jizhu"};
+        else order = new String[]{"zhijie", "jizhu", "gengfu"};
+        for (String v : order) {
+            ContentRepo.NoteRef r = "zhijie".equals(v) ? s.noteZj
+                    : "jizhu".equals(v) ? s.noteJz : s.noteGf;
+            if (r != null) {
+                usedVer[0] = v;
+                return r;
+            }
         }
         return null;
+    }
+
+    /** 注栏页脚的版本名（实际显示的那家） */
+    private static String noteVerLabel(String ver) {
+        if ("jizhu".equals(ver)) return "朱熹的版本";
+        if ("gengfu".equals(ver)) return "耕夫讲经典";
+        return "张居正的版本";
     }
 
     /**
@@ -524,7 +539,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             noteBarKey = null;
             return;
         }
-        String defLab = "zhijie".equals(notesVer) ? "张居正的版本" : "朱熹的版本";
+        String defLab = noteVerLabel(notesVer);
         if (curSentence < 0 || curSentence >= book.flat.size()) {
             String key = "ph|" + notesVer;
             if (!key.equals(noteBarKey)) {
@@ -535,8 +550,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             }
             return;
         }
-        boolean[] zj = new boolean[1];
-        ContentRepo.NoteRef ref = displayNote(book.flat.get(curSentence), zj);
+        String[] usedVer = new String[1];
+        ContentRepo.NoteRef ref = displayNote(book.flat.get(curSentence), usedVer);
         if (ref == null) {
             String key = "none|" + curSentence;
             if (!key.equals(noteBarKey)) {
@@ -551,7 +566,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         if (!key.equals(noteBarKey)) {
             noteBarKey = key;
             readerNoteText.setText(ref.text);
-            String lab = zj[0] ? "张居正的版本" : "朱熹的版本";
+            String lab = noteVerLabel(usedVer[0]);
             if (ref.endFlat > ref.startFlat) {
                 lab += " · 本注管第 " + (ref.startFlat + 1) + "–" + (ref.endFlat + 1) + " 句";
             }
@@ -1348,7 +1363,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         buildTimeline();
         hasNotes = false;
         for (ContentRepo.Sentence s : book.flat) {
-            if (s.noteZj != null || s.noteJz != null) { hasNotes = true; break; }
+            if (s.noteZj != null || s.noteJz != null || s.noteGf != null) { hasNotes = true; break; }
         }
         curSentence = -1;
         curClause = -1;

@@ -54,6 +54,7 @@ public class ContentRepo {
         /** v1.9.0 覆盖本句的注（张居正直解 / 朱熹集注）；该版本下无块覆盖时为 null */
         public NoteRef noteZj;
         public NoteRef noteJz;
+        public NoteRef noteGf;
         /** v1.7 句内可停标点点位（，。；！？，逐字对齐＋静音吸附定时间，个别估算点位
          *  在生成数据时已标记）：breakPos[i] 为标点在 textT 中的 UTF-16 下标（升序），
          *  breakMs[i] 为内容包原始时间轴毫秒（与 startMs 同口径）；无内部点位时为 null */
@@ -400,11 +401,12 @@ public class ContentRepo {
     }
 
     /**
-     * v1.9.0 注释挂载：注数据文件结构 {sentenceId: {zhijie, jizhu, zhijieSpan, jizhuSpan}}，
+     * v1.9.0 注释挂载：注数据文件结构 {sentenceId: {zhijie, jizhu, gengfu, zhijieSpan,
+     * jizhuSpan, gengfuSpan}}（gengfu＝《耕夫讲经典》，v1.20.5 加入的第三家，仅《大学》有），
      * 注文只挂在块首句、span 为该块覆盖的句数（块注）。本方法对每个版本先收集全部注块，
      * 再为每一句判定覆盖它的注块（多块覆盖时取起点最晚的那块，处理集注的嵌套小块），
      * 把判定结果同时写进 Sentence 字段（供竖排原生注栏用）与内容包 JSON 的句子对象
-     * （新增 "nt" 字段：{"zj"/"jz": {"t": 注文, "a": 块首拉平下标, "b": 块末拉平下标}}，
+     * （新增 "nt" 字段：{"zj"/"jz"/"gf": {"t": 注文, "a": 块首拉平下标, "b": 块末拉平下标}}，
      * 供阅读页注入）。无注文件/解析失败返回 false，调用方保持原 rawJson 不动。
      */
     private static boolean attachNotes(Context ctx, Book b, List<JSONObject> sentObjs) {
@@ -435,7 +437,7 @@ public class ContentRepo {
             JSONObject notes = new JSONObject(raw);
             int total = b.flat.size();
             boolean any = false;
-            String[][] vers = {{"zhijie", "zj"}, {"jizhu", "jz"}};
+            String[][] vers = {{"zhijie", "zj"}, {"jizhu", "jz"}, {"gengfu", "gf"}};
             for (String[] v : vers) {
                 String key = v[0], shortKey = v[1];
                 List<Integer> starts = new ArrayList<>();
@@ -465,7 +467,8 @@ public class ContentRepo {
                     ref.startFlat = starts.get(best);
                     ref.endFlat = ends.get(best);
                     if ("zhijie".equals(key)) b.flat.get(i).noteZj = ref;
-                    else b.flat.get(i).noteJz = ref;
+                    else if ("jizhu".equals(key)) b.flat.get(i).noteJz = ref;
+                    else b.flat.get(i).noteGf = ref;
                     JSONObject so = sentObjs.get(i);
                     JSONObject nt = so.optJSONObject("nt");
                     if (nt == null) {
