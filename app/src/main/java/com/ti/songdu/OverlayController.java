@@ -43,7 +43,7 @@ import java.util.List;
  * 形态二（CARD，v1.13.0 新增）：悬浮播放卡。把半圆钮往屏幕中间慢拖、拖离
  * 边缘超过约屏宽 25% 时松手 → 变形为播放卡停在松手处；卡只显示当前句
  * （跟读进行中显示当前跟读段）＋逐字注音（拼音在字上方），带播放/暂停钮
- * （无曲目时显示「时习」占位、按钮置灰）。卡宽高只由用户设定决定——内容
+ * （无曲目时显示「弦歌」占位、按钮置灰）。卡宽高只由用户设定决定——内容
  * 绝不改变卡尺寸：文本自动调字号（30sp 起逐级下调、注音按 0.4 比例跟随）
  * 塞进固定框，下限 9sp，到下限仍塞不下时末尾省略号截断；长句换行落点
  * 优先标点处。右下角琥珀色圆底把手拖动改宽高（宽 [160dp, 屏宽 94%]、
@@ -941,7 +941,7 @@ public class OverlayController {
         List<CardUnit> units;
         if (track == null) {
             key = "#none";
-            units = plainUnits("时习");
+            units = plainUnits("弦歌");
         } else {
             ensureCardBook(track);
             boolean trad = readerTrad();
@@ -976,7 +976,7 @@ public class OverlayController {
     }
 
     private static String titleOr(Track track) {
-        return track.title != null && !track.title.isEmpty() ? track.title : "时习";
+        return track.title != null && !track.title.isEmpty() ? track.title : "弦歌";
     }
 
     private static List<CardUnit> plainUnits(String text) {

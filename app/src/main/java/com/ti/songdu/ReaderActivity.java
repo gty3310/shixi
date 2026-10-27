@@ -798,7 +798,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         // 不跟随且本曲目有当前句时显示（暂停时点它＝跳到暂停句）。
         if (!reciteOn) {
             boolean nowPlayingMine = mine && svc.playing;
-            if (!fOn && nowPlayingMine && !prevPlayingMine) {
+            // v1.20.2：改速内部重启（暂停→定速→原地重播）不是用户的暂停→播放，
+            // 标记期间不判边沿（prevPlayingMine 在下方照常同步），绝不误进跟随
+            if (!svc.isSpeedRestarting() && !fOn && nowPlayingMine && !prevPlayingMine) {
                 followGate.onPlayStarted();
                 if (curSentence >= 0) {
                     web.evaluateJavascript("setCur(" + curSentence + ",true)", null);

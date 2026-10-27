@@ -1,0 +1,15 @@
+  PASS 1 播放中改速走了内部重启
+  PASS 2 动作顺序=position→pause→applyParams→seek→start
+  PASS 3 seek 回原位（位置保持）
+  PASS 4 重启全程标记为 true、结束后为 false
+  PASS 5 新速度在重启中已应用
+  PASS 6 内部重启未触发 FollowGate 边沿（零调用）
+  PASS 7 FollowGate 改速前后状态不变（仍未跟随）
+  PASS 8 跟随中改速后仍在跟随、边沿零调用
+  PASS 9 暂停改速不走重启、零播放器动作
+  PASS 10 暂停改速未应用参数（留待起播前应用）
+  PASS 11 起播时先应用新速度再 start
+  PASS 12 未就绪改速不起播、零动作
+  PASS 13 真实暂停→播放边沿仍进跟随
+  PASS 14 手滑仍可退出跟随
+RESULT: 14 passed, 0 failed

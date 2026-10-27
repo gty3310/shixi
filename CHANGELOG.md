@@ -3,6 +3,17 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.20.2] - 2026-10-27
+
+发布提交：PENDING · 对比：https://github.com/gty3310/shixi/compare/v1.20.1...v1.20.2 · 标签 v1.20.2
+
+### 修复
+- 播放中途改倍速出现毛刺声（用户真机定位：只在播放中改速时出现，暂停后以同样速度重播则干净；AI 轨高频齿音丰富只是让毛刺更明显，离线定速渲染测不出这一扳机）：扳机为 MediaPlayer 播放中 setPlaybackParams 改速。改法：setSpeed 在播放中改走内部重启——记精确位置 → 暂停 → 应用新速度 → seekTo(SEEK_CLOSEST_SYNC) 回原位 → 重播，全程不翻转 playing 字段，通知/悬浮窗/当前句锚点无可观测中断；暂停或未就绪时只记参数，各起播入口在 start 前本就重新 applySpeed，起播即定速。编排抽成纯逻辑类 SpeedRestarter（Ops 接口落地播放器原语），并以内部重启标记与 v1.19.0 FollowGate 隔离：ReaderActivity 的暂停→播放边沿检测在标记期间跳过判定、只同步基线，内部重启绝不误入跟随；跟读/识读逐段起播本就每段新起播，未动其状态机，改速与其共用 setSpeed 入口、重启只碰播放器原语不触其字段。桌面 harness（tools/speed_harness，真实 FollowGate＋SpeedRestarter 类）14 项断言全过：重启路径与动作顺序、位置保持、标记生命周期、改速前后 FollowGate 状态不变、跟随中改速不被扰动、暂停改速不起播且参数待起播生效、真实用户边沿仍生效
+
+### 变更
+- 应用更名「时习」→「弦歌」（出《论语·阳货》武城弦歌，用户当日语音定名，xián 非 xuán）：启动器 label、主页标题、帮助页（含旧名出处句改述为武城弦歌）、通知标题兜底、悬浮窗占位名、通知渠道描述、权限弹窗正文等可见字样全数更换；包名 com.ti.songdu、GitHub 仓库名与全部数据结构（书库/记录/偏好/令牌）不动，覆盖升级数据无损；启动图标本版未换（新 logo 另行定稿）
+- 顺带对齐 BuildInfo.VERSION_CODE 与清单 versionCode（v1.20.1 构建脚本里 BuildInfo 滞留 37，可能使更新日志弹框不按版触发；本版起两处同为 39）
+
 ## [1.20.1] - 2026-10-27
 
 发布提交：929d47c · 对比：https://github.com/gty3310/shixi/compare/v1.20.0...v1.20.1 · 标签 v1.20.1

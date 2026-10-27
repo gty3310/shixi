@@ -871,7 +871,7 @@ public class PlayerService extends Service {
         if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
             NotificationChannel ch = new NotificationChannel(
                     CHANNEL_ID, "播放", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("时习播放状态");
+            ch.setDescription("弦歌播放状态");
             nm.createNotificationChannel(ch);
         }
     }
@@ -1294,7 +1294,22 @@ public class PlayerService extends Service {
     public void setSpeed(float s) {
         store.speed = s;
         store.saveSettings();
-        applySpeed();
+        // v1.20.2：播放中改速走内部重启（暂停→定速→回原位→重播），治中途改
+        // PlaybackParams 的毛刺（用户真机定位：暂停后以同样速度重播则干净，
+        // 素材高频丰富只是让毛刺更明显）。暂停/未就绪时 SpeedRestarter 只放行
+        // 记录参数——各起播入口在 start 前本就会 applySpeed，起播即定速。
+        if (speedRestarter.onSpeedChanged(speedOps)) {
+            // 内部重启已完成，playing 全程未翻转；兜底：万一重播没真正起来
+            // （设备异常），把状态如实落回暂停，免得界面假装还在播
+            try {
+                if (!mp.isPlaying()) {
+                    playing = false;
+                    updateNotification();
+                    notifyState();
+                }
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     public float getSpeed() {
@@ -1308,6 +1323,69 @@ public class PlayerService extends Service {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    // v1.20.2 改速内部重启的播放器落地（编排在纯逻辑类 SpeedRestarter）：
+    // 全程只碰播放器原语——不翻转 playing 字段、不走 pausePlayer/resume 的
+    // 语义包装，对通知、悬浮窗、ReaderActivity 轮询而言播放从未中断；
+    // 跟随当前句锚点（位置原样恢复）、暂停语义、跟读状态机均不受扰动。
+    private final SpeedRestarter speedRestarter = new SpeedRestarter();
+    private final SpeedRestarter.Ops speedOps = new SpeedRestarter.Ops() {
+        @Override
+        public boolean isPrepared() {
+            return mp != null && prepared;
+        }
+
+        @Override
+        public boolean isPlaying() {
+            return playing;
+        }
+
+        @Override
+        public long positionMs() {
+            try {
+                return mp.getCurrentPosition();
+            } catch (Exception e) {
+                return current != null ? current.positionMs : 0;
+            }
+        }
+
+        @Override
+        public void pauseRaw() {
+            try {
+                mp.pause();
+            } catch (Exception ignored) {
+            }
+        }
+
+        @Override
+        public void applyParams() {
+            applySpeed();
+        }
+
+        @Override
+        public void seekBackTo(long posMs) {
+            // SEEK_CLOSEST_SYNC（minSdk 26 起可用）取最近同步帧回原位：
+            // MP3 帧长约 26ms，偏差在一帧内、同句无跳感
+            try {
+                mp.seekTo(posMs, MediaPlayer.SEEK_CLOSEST_SYNC);
+                if (current != null) current.positionMs = posMs;
+            } catch (Exception ignored) {
+            }
+        }
+
+        @Override
+        public void startRaw() {
+            try {
+                mp.start();
+            } catch (Exception ignored) {
+            }
+        }
+    };
+
+    /** v1.20.2：改速内部重启进行中（供 ReaderActivity 的 FollowGate 边沿检测隔离判定） */
+    public boolean isSpeedRestarting() {
+        return speedRestarter.isRestarting();
     }
 
     private void saveCurrentPosition() {
@@ -1332,7 +1410,7 @@ public class PlayerService extends Service {
 
     // ---------- 通知 ----------
     private Notification buildNotification() {
-        String title = current != null ? current.title : "时习";
+        String title = current != null ? current.title : "弦歌";
         // 副文本位放当前音频的统计串（今日/昨日/本周/上周/本月），与首页卡片同口径；
         // 每次计数变化、切歌、播放/暂停都会重建通知刷新这串数字
         String text = current == null ? "打开应用选择音频开始播放"

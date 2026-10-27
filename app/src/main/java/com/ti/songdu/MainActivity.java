@@ -323,7 +323,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private void showOverlayPermissionHint() {
         new AlertDialog.Builder(this)
                 .setTitle("悬浮播放按钮")
-                .setMessage("时习可以在屏幕侧边留一个半透明的半圆按钮：轻点播放/暂停，"
+                .setMessage("弦歌可以在屏幕侧边留一个半透明的半圆按钮：轻点播放/暂停，"
                         + "长按打开正在读的阅读页，在别的 App 上面也能用。\n\n"
                         + "这需要系统里的「显示在其他应用上层」权限，授权一次即可；"
                         + "不授权也不影响在 App 里正常使用。")
@@ -818,7 +818,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         btnCopy.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
-                cm.setPrimaryClip(ClipData.newPlainText("时习进度", et.getText().toString()));
+                cm.setPrimaryClip(ClipData.newPlainText("弦歌进度", et.getText().toString()));
                 Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
             }
             dialog.dismiss();
