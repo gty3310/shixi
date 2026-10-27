@@ -42,7 +42,7 @@ import org.json.JSONObject;
 
 import java.io.InputStream;
 
-import com.ti.songdu.recite.ReciteStats;
+import com.ti.songdu.recite.ReciteStatsV2;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -158,6 +158,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 WEEKDAYS[today.getDayOfWeek().getValue() - 1]));
 
         // v1.14.0：「添加书籍」改开书库页（线上目录下载＋自传入口）；本地导入弹窗由书库页回调用
+        WhatsNew.maybeShowOnLaunch(this); // v1.18.0 新版首次打开弹更新日志
+
         findViewById(R.id.btnAdd).setOnClickListener(
                 v -> startActivity(new Intent(this, BookstoreActivity.class)));
         findViewById(R.id.btnHelp).setOnClickListener(v -> startActivity(
@@ -1598,19 +1600,77 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         JSONObject root = new JSONObject();
         try {
             // —— 不熟练的字 ——
-            Map<String, Map<String, List<ReciteStats.Record>>> byBook = new HashMap<>();
-            for (ReciteStats.Record r : ReciteStats.get(this).allRecords()) {
-                byBook.computeIfAbsent(r.bookId, k -> new HashMap<>())
-                        .computeIfAbsent(r.hanzi, k -> new ArrayList<>())
-                        .add(r);
+            // v1.18.0 复习页分档：主列表＝确定错＋四类高权重字中被报过的；
+            // dual 单列人工确认区；doubt（低先验单引擎）折叠；DEL 单列折叠。
+            Map<String, Map<String, List<ReciteStatsV2.Record>>> byBook = new HashMap<>();
+            JSONArray dualArr = new JSONArray();
+            JSONArray doubtArr = new JSONArray();
+            for (ReciteStatsV2.Record r : ReciteStatsV2.get(this).allRecords()) {
+                boolean highCat = com.ti.songdu.recite.PriorTable.isHighCategory(r.category);
+                if ("confirmed".equals(r.tier) || highCat && !"dual".equals(r.tier)
+                        && !"doubt".equals(r.tier)) {
+                    byBook.computeIfAbsent(r.bookId, k -> new HashMap<>())
+                            .computeIfAbsent(r.hanzi, k -> new ArrayList<>())
+                            .add(r);
+                } else if ("dual".equals(r.tier)) {
+                    JSONObject dobj = new JSONObject();
+                    dobj.put("key", r.key());
+                    dobj.put("bookId", r.bookId);
+                    dobj.put("hanzi", r.hanzi);
+                    dobj.put("pyToned", r.pyToned);
+                    dobj.put("heardMain", r.heardMain);
+                    dobj.put("clauseText", r.clauseText);
+                    dobj.put("posInClause", Math.max(0, r.ci - r.clauseHanziStart));
+                    dobj.put("sentId", r.sentId);
+                    dobj.put("count", r.count);
+                    dobj.put("score", r.score);
+                    dualArr.put(dobj);
+                } else if ("doubtHigh".equals(r.tier)) {
+                    // 存疑·高（非高权重字）：不进主列表，与存疑一同折叠
+                    JSONObject dobj = new JSONObject();
+                    dobj.put("bookId", r.bookId);
+                    dobj.put("hanzi", r.hanzi);
+                    dobj.put("pyToned", r.pyToned);
+                    dobj.put("heardMain", r.heardMain);
+                    dobj.put("clauseText", r.clauseText);
+                    dobj.put("posInClause", Math.max(0, r.ci - r.clauseHanziStart));
+                    dobj.put("sentId", r.sentId);
+                    dobj.put("count", r.count);
+                    doubtArr.put(dobj);
+                } else {
+                    JSONObject dobj = new JSONObject();
+                    dobj.put("bookId", r.bookId);
+                    dobj.put("hanzi", r.hanzi);
+                    dobj.put("pyToned", r.pyToned);
+                    dobj.put("heardMain", r.heardMain);
+                    dobj.put("clauseText", r.clauseText);
+                    dobj.put("posInClause", Math.max(0, r.ci - r.clauseHanziStart));
+                    dobj.put("sentId", r.sentId);
+                    dobj.put("count", r.count);
+                    doubtArr.put(dobj);
+                }
             }
+            root.put("dual", dualArr);
+            root.put("doubt", doubtArr);
+            JSONArray delArr = new JSONArray();
+            for (ReciteStatsV2.Del d : ReciteStatsV2.get(this).allDels()) {
+                JSONObject dobj = new JSONObject();
+                dobj.put("bookId", d.bookId);
+                dobj.put("hanzi", d.hanzi);
+                dobj.put("pyToned", d.pyToned);
+                dobj.put("clauseText", d.clauseText);
+                dobj.put("sentId", d.sentId);
+                dobj.put("count", d.count);
+                delArr.put(dobj);
+            }
+            root.put("dels", delArr);
             List<String> bookIds = new ArrayList<>(byBook.keySet());
             // 书序：大学、中庸、论语在前，其余按最近出错时间倒序
             Map<String, Long> bookLast = new HashMap<>();
             for (String bid : bookIds) {
                 long mx = 0;
-                for (List<ReciteStats.Record> rs : byBook.get(bid).values()) {
-                    for (ReciteStats.Record r : rs) mx = Math.max(mx, r.lastTs);
+                for (List<ReciteStatsV2.Record> rs : byBook.get(bid).values()) {
+                    for (ReciteStatsV2.Record r : rs) mx = Math.max(mx, r.lastTs);
                 }
                 bookLast.put(bid, mx);
             }
@@ -1628,13 +1688,13 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 JSONObject bo = new JSONObject();
                 bo.put("bookId", bid);
                 bo.put("title", bookTitleOf(bk != null ? bk.title : bid));
-                Map<String, List<ReciteStats.Record>> byChar = byBook.get(bid);
+                Map<String, List<ReciteStatsV2.Record>> byChar = byBook.get(bid);
                 List<String> chars = new ArrayList<>(byChar.keySet());
                 Map<String, Integer> charTotal = new HashMap<>();
                 int bookTotal = 0;
                 for (String hz : chars) {
                     int t = 0;
-                    for (ReciteStats.Record r : byChar.get(hz)) t += r.count;
+                    for (ReciteStatsV2.Record r : byChar.get(hz)) t += r.count;
                     charTotal.put(hz, t);
                     bookTotal += t;
                 }
@@ -1645,10 +1705,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                     JSONObject co = new JSONObject();
                     co.put("hanzi", hz);
                     co.put("total", charTotal.get(hz));
-                    List<ReciteStats.Record> rs = new ArrayList<>(byChar.get(hz));
+                    List<ReciteStatsV2.Record> rs = new ArrayList<>(byChar.get(hz));
                     rs.sort((a, b) -> Long.compare(b.lastTs, a.lastTs));
                     JSONArray rowsArr = new JSONArray();
-                    for (ReciteStats.Record r : rs) {
+                    for (ReciteStatsV2.Record r : rs) {
                         JSONObject ro = new JSONObject();
                         ro.put("clauseText", r.clauseText);
                         ro.put("posInClause", Math.max(0, r.ci - r.clauseHanziStart));
@@ -1761,7 +1821,25 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         @android.webkit.JavascriptInterface
         public void delChar(final String bookId, final String hanzi) {
             runOnUiThread(() -> {
-                ReciteStats.get(MainActivity.this).deleteBookChar(bookId, hanzi);
+                ReciteStatsV2.get(MainActivity.this).deleteBookChar(bookId, hanzi);
+                loadReviewPage();
+            });
+        }
+
+        /** v1.18.0 人工确认区：存疑·双报转正为确定错 */
+        @android.webkit.JavascriptInterface
+        public void confirmDual(final String recordKey) {
+            runOnUiThread(() -> {
+                ReciteStatsV2.get(MainActivity.this).confirmDual(recordKey);
+                loadReviewPage();
+            });
+        }
+
+        /** v1.18.0 人工确认区：勾销该（字,音）组合，此后不再报 */
+        @android.webkit.JavascriptInterface
+        public void dismissCombo(final String bookId, final String hanzi, final String heard) {
+            runOnUiThread(() -> {
+                ReciteStatsV2.get(MainActivity.this).dismissCombo(bookId, hanzi, heard);
                 loadReviewPage();
             });
         }

@@ -83,6 +83,21 @@
   .lpbar span.del { color: #FFA48F; }
   .lpbar span + span { border-left: 1px solid rgba(255,255,255,.16); }
 
+  .actrow { display:flex; gap:8px; padding: 0 13px 10px; }
+  .actrow span {
+    font-size: 12px; padding: 6px 14px; border-radius: 999px; letter-spacing:.06em;
+  }
+  .actrow .ok { background:#9E3B2B; color:#FFF7EA; font-weight:600; }
+  .actrow .no { border:1px solid #D8CFB8; color:#8A8172; }
+  .foldsec { margin: 4px 0 12px; }
+  .foldhead { font-size:12.5px; color:#9A8F7A; padding:8px 4px; letter-spacing:.05em; }
+  .drow {
+    background:#FFFDF7; border:1px solid #EDE6D2; border-radius:12px;
+    padding: 9px 13px; margin-bottom:8px; font-size:13.5px; color:#55503F;
+  }
+  .drow .hz { font-size:16px; color:#33302A; font-family:"Songti SC","Noto Serif CJK SC",serif; }
+  .drow .mt { font-size:11px; color:#A2977F; margin-left:8px; }
+
   /* 我的笔记 */
   .note {
     background: #FFFDF7; border: 1px solid #E7DFC9; border-radius: 14px;
@@ -148,6 +163,7 @@ var foldBook = {};   // bookId → true 收起
 var foldChar = {};   // bookId|hanzi → true 收起
 var rowsFull = {};   // bookId|hanzi → true 展开全部句子
 var lpKey = null;    // 当前显示长按小条的字组键
+var foldDoubt = true, foldDel = true;
 var lpFired = false;
 
 function render(){
@@ -156,7 +172,7 @@ function render(){
   h += '<div class="sec-title"><div class="bar"></div><div class="h">不熟练的字</div>' +
        '<div class="d">来自识读纠错 · 按经典、按字分组 · 点句跳回原处</div></div>';
   if (!DATA.books || !DATA.books.length){
-    h += '<div class="empty">还没有识读记录。在阅读页打开「识读」，出声领读，读错的字会记到这里。</div>';
+    h += '<div class="empty">还没有确定读错的字。在阅读页打开「识读」，出声领读，判定确定的错字会记到这里。</div>';
   }
   (DATA.books || []).forEach(function(b){
     var bFold = !!foldBook[b.bookId];
@@ -201,6 +217,53 @@ function render(){
     }
     h += '</div>';
   });
+
+  /* ===== 请确认（存疑·双报） ===== */
+  if (DATA.dual && DATA.dual.length){
+    h += '<div class="sec-title"><div class="bar"></div><div class="h">请确认</div>' +
+         '<div class="d">两个引擎都报了同一个字 · 是我读错就转正，机器听错就勾销</div></div>';
+    DATA.dual.forEach(function(d){
+      h += '<div class="wgroup"><div class="ghead">' +
+           '<div class="gchar">' + esc(d.hanzi) + '</div>' +
+           '<div class="chip">听成了 ' + esc(d.heardMain || '') + '</div>' +
+           (d.count > 1 ? '<div class="chip">报 ' + d.count + ' 次</div>' : '') +
+           '</div><div class="rows"><div class="srow" data-book="' + esc(d.bookId) +
+           '" data-sent="' + esc(d.sentId) + '"><div class="clause">' +
+           clauseHTML({clauseText:d.clauseText, posInClause:d.posInClause, pyToned:d.pyToned}) +
+           '</div></div></div>' +
+           '<div class="actrow"><span class="ok" data-confirm="' + esc(d.key) + '">是我读错 · 转正</span>' +
+           '<span class="no" data-dismiss="' + esc(d.bookId) + '|' + esc(d.hanzi) + '|' + esc(d.heardMain || '') + '">机器听错 · 勾销</span></div></div>';
+    });
+  }
+
+  /* ===== 折叠区：存疑（机器可能听错了） ===== */
+  if (DATA.doubt && DATA.doubt.length){
+    h += '<div class="foldsec"><div class="foldhead" data-fold="doubt">机器可能听错了（' +
+         DATA.doubt.length + ' 条） ' + (foldDoubt ? '▸ 展开' : '▾ 收起') + '</div>';
+    if (!foldDoubt){
+      DATA.doubt.forEach(function(d){
+        h += '<div class="drow" data-book="' + esc(d.bookId) + '" data-sent="' + esc(d.sentId) +
+             '"><span class="hz">' + esc(d.hanzi) + '</span><span class="mt">' +
+             esc(d.pyToned) + ' · 听成 ' + esc(d.heardMain || '') + ' · ' + esc(d.clauseText) +
+             '</span></div>';
+      });
+    }
+    h += '</div>';
+  }
+
+  /* ===== 折叠区：漏读（只看不计分） ===== */
+  if (DATA.dels && DATA.dels.length){
+    h += '<div class="foldsec"><div class="foldhead" data-fold="del">漏读（' +
+         DATA.dels.length + ' 条 · 只看不计分） ' + (foldDel ? '▸ 展开' : '▾ 收起') + '</div>';
+    if (!foldDel){
+      DATA.dels.forEach(function(d){
+        h += '<div class="drow" data-book="' + esc(d.bookId) + '" data-sent="' + esc(d.sentId) +
+             '"><span class="hz">' + esc(d.hanzi) + '</span><span class="mt">' +
+             esc(d.pyToned) + ' · ' + esc(d.clauseText) + '</span></div>';
+      });
+    }
+    h += '</div>';
+  }
 
   /* ===== 我的笔记 ===== */
   h += '<div class="sec-title"><div class="bar"></div><div class="h">我的笔记</div>' +
@@ -283,6 +346,33 @@ function bind(){
       if (more) rowsFull[more] = true;
       if (less) rowsFull[less] = false;
       render();
+    });
+  });
+  document.querySelectorAll('[data-confirm]').forEach(function(el){
+    el.addEventListener('click', function(e){
+      e.stopPropagation();
+      if (window.Bridge && Bridge.confirmDual) Bridge.confirmDual(el.getAttribute('data-confirm'));
+    });
+  });
+  document.querySelectorAll('[data-dismiss]').forEach(function(el){
+    el.addEventListener('click', function(e){
+      e.stopPropagation();
+      var parts = el.getAttribute('data-dismiss').split('|');
+      if (window.Bridge && Bridge.dismissCombo)
+        Bridge.dismissCombo(parts[0], parts[1], parts.slice(2).join('|'));
+    });
+  });
+  document.querySelectorAll('.foldhead').forEach(function(el){
+    el.addEventListener('click', function(){
+      if (el.getAttribute('data-fold') === 'doubt') foldDoubt = !foldDoubt;
+      else foldDel = !foldDel;
+      render();
+    });
+  });
+  document.querySelectorAll('.drow').forEach(function(el){
+    el.addEventListener('click', function(){
+      if (window.Bridge && Bridge.jump)
+        Bridge.jump(el.getAttribute('data-book'), el.getAttribute('data-sent'));
     });
   });
   document.querySelectorAll('.note').forEach(function(el){

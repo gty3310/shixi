@@ -65,6 +65,14 @@ public final class ReciteAligner {
     /** 本段已发出的 INS 事件键（unit|heard），防 partial 重算时重复发同一多读 */
     private final java.util.Set<String> emittedIns = new java.util.HashSet<>();
     /**
+     * v1.18.0 去重（修重锚重复提交）：同一 epoch 内同一 (type|unit|heard) 事件
+     * 只发一次。重锚把指针拉回后重对齐会再次产出同一批事件，旧口径因此重复
+     * 计数（实测 s12 三条 DEL 被提交两次）。epoch 只在 startAtSentence 时递增，
+     * 重锚/段切换不清——同一遍朗读里重读同句请停开一次识读（新会话新 epoch）。
+     */
+    private final java.util.Set<String> emittedErrors = new java.util.HashSet<>();
+    private int dedupEpoch = 0;
+    /**
      * partial 每次送来整段全文，而 ptr 会随提交推进到段中——若拿全文对当前窗口
      * 重对齐，段首的已读 token 无处安放会毒化对齐（实测：整段后半被判低命中而
      * 整段丢弃）。sherpa 的 partial 每个 token 自带时间戳，故按时间切后缀：
@@ -88,6 +96,8 @@ public final class ReciteAligner {
             Integer s = data.sentUnitStart.get(flat);
             if (s != null && s >= 0) ptr = s;
         }
+        dedupEpoch++;
+        emittedErrors.clear();
         segId++;
         reanchorTriedInSeg = false;
         consumedTime = Float.NEGATIVE_INFINITY;
@@ -342,6 +352,7 @@ public final class ReciteAligner {
      */
     private void commit(List<Op> ops, boolean isFinal) {
         int newPtr = ptr;
+        boolean leadingEventsAllDel = true;
         for (int k = 0; k < ops.size(); k++) {
             Op op = ops.get(k);
             // 指针之前的回溯区：只看不提交（已在先前 partial 提交过）
@@ -364,6 +375,14 @@ public final class ReciteAligner {
             int prevD = prevMatchDist(ops, k);
             int nextD = nextMatchDist(ops, k);
             boolean anchored = (prevD <= 8 || k < 3) && nextD <= 14;
+            // v1.18.0 修段首 DEL 锚点卡死：段首恰为漏读串时，其前没有命中可锚，
+            // 旧规则令整段提交停摆（离线模型只喂 final 时在 s3 实测卡死）。
+            // final 提交时，段首连续 DEL 串只要其后 24 个 op 内有命中即放行。
+            if (!anchored && isFinal && op.kind == OP_DEL && leadingEventsAllDel
+                    && nextD <= 24) {
+                anchored = true;
+            }
+            if (op.kind != OP_DEL) leadingEventsAllDel = false;
             if (!anchored) {
                 listener.onUncertain("evt-unconfirmed kind " + op.kind + " unit " + op.unit
                         + " prevD=" + prevD + " nextD=" + (nextD == Integer.MAX_VALUE ? -1 : nextD));
@@ -376,6 +395,12 @@ public final class ReciteAligner {
             if (e.type == ErrorEvent.INS && !emittedIns.add(e.unit + "|" + e.heard)) {
                 markConsumed(op);
                 continue; // 同一段内同一多读已发过（partial 重算），不重复计
+            }
+            if (!emittedErrors.add(dedupEpoch + "|" + e.type + "|" + e.unit + "|" + e.heard)) {
+                // v1.18.0：重锚/重对齐重复产出的同一事件，不重复发（仍推进指针）
+                if (op.kind != OP_INS) newPtr = Math.max(newPtr, op.unit + 1);
+                markConsumed(op);
+                continue;
             }
             listener.onError(e);
             if (op.kind != OP_INS) newPtr = Math.max(newPtr, op.unit + 1);

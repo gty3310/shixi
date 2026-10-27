@@ -1,0 +1,28 @@
+raw=51 dedup=48
+  A s2 後 py=hòu heard=号 other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  A s2 慮 py=lǜ heard=女 other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  A s3 近 py=jìn heard=jing other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  A s4 先 py=xiān heard=xin other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  A s7 正 py=zhèng heard=zhe other=zhe W=-3 d=1 E=1 C=2 K=0 S=0 tier=dual
+  A s8 誠 py=chéng heard=chen other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  A s11 而 py=ér heard=ren other=null W=-3 d=2 E=3 C=0 K=-2 S=-2 tier=doubt
+  A s11 修 py=xiū heard=qiu other=null W=-3 d=1 E=1 C=0 K=-2 S=-4 tier=doubt
+  A s11 平 py=píng heard=pin other=pin W=-3 d=1 E=1 C=2 K=-2 S=-2 tier=dual
+  A s13 其 py=qí heard=ji other=null W=0 d=1 E=1 C=0 K=-2 S=-1 tier=doubt
+  A s13 亂 py=luàn heard=lang other=乐 W=-3 d=1 E=1 C=1 K=-2 S=-3 tier=doubt
+  A s13 其 py=qí heard=冯 other=null W=0 d=2 E=3 C=0 K=-2 S=1 tier=doubtHigh
+  A s13 所 py=suǒ heard=zi other=null W=-3 d=2 E=3 C=0 K=-2 S=-2 tier=doubt
+ENGINE A: confirmed=0 dual=2 doubtHigh=1 doubt=10 delSeparate=25
+  dual s7 正 py=zhèng heard=zhe other=zhe W=-3 E=1 C=2 K=0 S=0
+  dual s11 平 py=píng heard=pin other=pin W=-3 E=1 C=2 K=-2 S=-2
+  B s4 明 py=míng heard=min other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  B s7 正 py=zhèng heard=zhe other=zhe W=-3 d=1 E=1 C=2 K=0 S=0 tier=dual
+  B s11 平 py=píng heard=pin other=pin W=-3 d=1 E=1 C=2 K=0 S=0 tier=dual
+  B s13 亂 py=luàn heard=乐 other=lang W=-3 d=1 E=1 C=1 K=0 S=-1 tier=doubt
+  B s17 之 py=zhī heard=zi other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+  B s19 閒 py=xián heard=jian other=null W=-3 d=1 E=1 C=0 K=0 S=-2 tier=doubt
+ENGINE B: confirmed=0 dual=2 doubtHigh=0 doubt=4 delSeparate=4
+  dual s7 正 py=zhèng heard=zhe other=zhe W=-3 E=1 C=2 K=0 S=0
+  dual s11 平 py=píng heard=pin other=pin W=-3 E=1 C=2 K=0 S=0
+unit 96 reports={A=zhe, B=zhe}
+unit 164 reports={A=pin, B=pin}

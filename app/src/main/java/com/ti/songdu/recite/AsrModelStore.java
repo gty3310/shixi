@@ -423,4 +423,159 @@ public final class AsrModelStore {
             return "";
         }
     }
+
+    // ---------- v1.18.0 高级版 AI（离线大模型，清单 sensevoice 键驱动） ----------
+
+    public static final ModelFile[] SV_FILES = {
+            new ModelFile("sensevoice-model.int8.onnx", 239233841L, "0e8e550411d3589be9f0af06f1c8fec3"),
+            new ModelFile("sensevoice-tokens.txt", 315894L, "17cdd9d527315e28553153706d23c719"),
+    };
+    public static final long SV_TOTAL_BYTES;
+    static {
+        long t2 = 0;
+        for (ModelFile f : SV_FILES) t2 += f.size;
+        SV_TOTAL_BYTES = t2;
+    }
+    public static final String SV_MODEL_NAME = SV_FILES[0].name;
+    public static final String SV_TOKENS_NAME = SV_FILES[1].name;
+
+    public static boolean isSenseVoiceReady(Context ctx) {
+        for (ModelFile f : SV_FILES) {
+            File pf = file(ctx, f.name);
+            if (!pf.exists() || pf.length() != f.size) return false;
+        }
+        return true;
+    }
+
+    public static long svMissingBytes(Context ctx) {
+        long done = 0;
+        for (ModelFile f : SV_FILES) {
+            File pf = file(ctx, f.name);
+            if (pf.exists() && pf.length() == f.size) done += f.size;
+        }
+        return SV_TOTAL_BYTES - done;
+    }
+
+    /**
+     * 按选择集确保模型就绪（阻塞，后台线程调用）：wantBasic 走既有基础版路线
+     * （Gitee 清单＋HF 兜底）；wantSv 只走 Gitee 清单 sensevoice 键路线
+     * （清单值与内置 size/md5 对不上即失败，不用清单覆盖内置校验）。
+     * 进度按所选集合总字节合并上报；已就绪文件不重下。
+     */
+    public static void ensureSet(Context ctx, boolean wantBasic, boolean wantSv, Callback cb) {
+        long total = (wantBasic ? TOTAL_BYTES : 0) + (wantSv ? SV_TOTAL_BYTES : 0);
+        long baseDone = (wantBasic ? presentBytes(ctx) : 0)
+                + (wantSv ? (SV_TOTAL_BYTES - svMissingBytes(ctx)) : 0);
+        final long[] doneBox = {baseDone};
+        Callback wrap = cb == null ? null : new Callback() {
+            @Override public void onProgress(long d, long tt) {
+                // 子路线按各自总量上报，这里统一折算为所选集合进度
+                cb.onProgress(Math.min(total, doneBox[0]), total);
+            }
+            @Override public void onDone() {}
+            @Override public void onError(String m) {}
+        };
+        try {
+            if (wantBasic && !isReady(ctx)) {
+                final long before = presentBytes(ctx);
+                ensure(ctx, new Callback() {
+                    @Override public void onProgress(long d, long tt) {
+                        doneBox[0] = (wantSv ? (SV_TOTAL_BYTES - svMissingBytes(ctx)) : 0) + d;
+                        if (cb != null) cb.onProgress(Math.min(doneBox[0], total), total);
+                    }
+                    @Override public void onDone() {}
+                    @Override public void onError(String m) {}
+                });
+                if (!isReady(ctx)) throw new IllegalStateException("基础版模型不完整");
+                doneBox[0] = (wantSv ? (SV_TOTAL_BYTES - svMissingBytes(ctx)) : 0) + TOTAL_BYTES;
+            }
+            if (wantSv && !isSenseVoiceReady(ctx)) {
+                ensureSenseVoice(ctx, doneBox, total, cb);
+                if (!isSenseVoiceReady(ctx)) throw new IllegalStateException("高级版模型不完整");
+            }
+            if (cb != null) { cb.onProgress(total, total); cb.onDone(); }
+        } catch (Exception e) {
+            if (cb != null) cb.onError(e.getMessage() == null ? "下载失败" : e.getMessage());
+        }
+    }
+
+    private static void ensureSenseVoice(Context ctx, long[] doneBox, long total, Callback cb)
+            throws Exception {
+        JSONObject manifest = fetchManifest(ctx);
+        JSONObject sv = manifest.optJSONObject("sensevoice");
+        if (sv == null) throw new IllegalStateException("模型清单缺少高级版条目");
+        JSONArray files = sv.getJSONArray("files");
+        Map<String, JSONObject> byName = new HashMap<>();
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject o = files.getJSONObject(i);
+            byName.put(o.getString("name"), o);
+        }
+        final long[] progress = {SV_TOTAL_BYTES - svMissingBytes(ctx)};
+        final long[] attemptDelta = {0};
+        Bookstore.ProgressListener chunk = new Bookstore.ProgressListener() {
+            @Override public void onProgress(long d, long tt) {
+                progress[0] += d;
+                attemptDelta[0] += d;
+                doneBox[0] = (TOTAL_BYTES >= 0 ? Math.max(0, doneBox[0]) : 0);
+                if (cb != null) cb.onProgress(Math.min(total, (total - SV_TOTAL_BYTES) + Math.min(progress[0], SV_TOTAL_BYTES)), total);
+            }
+            @Override public void onDone(boolean ok, String error) {}
+            @Override public void onFileRetry(String path, int attempt, int maxAttempts, String reason) {}
+        };
+        for (ModelFile f : SV_FILES) {
+            File dest = file(ctx, f.name);
+            if (dest.exists() && dest.length() == f.size) continue;
+            JSONObject fe = byName.get(f.name);
+            if (fe == null || fe.getLong("size") != f.size
+                    || !f.md5.equalsIgnoreCase(fe.optString("md5", ""))) {
+                throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
+            }
+            String repoPath = fe.getString("repo_path");
+            JSONObject del = fe.optJSONObject("delivery");
+            if (del != null && "split_parts_contents_api".equals(del.optString("method"))) {
+                fetchPartsAssembleSv(ctx, f, del, dest, progress, attemptDelta, chunk);
+            } else {
+                File tmp = new File(dir(ctx), f.name + ".dl");
+                fetchVerifiedGitee(repoPath, tmp, f.size, f.md5, progress, attemptDelta, chunk, null);
+                renameInto(tmp, dest);
+            }
+        }
+    }
+
+    /** 高级版分片拼合：parts 在该文件自己的 delivery 段里（清单格式 v1.18.0 定版） */
+    private static void fetchPartsAssembleSv(Context ctx, ModelFile f, JSONObject del,
+                                             File dest, long[] progress, long[] attemptDelta,
+                                             Bookstore.ProgressListener chunk) throws Exception {
+        JSONArray parts = del.getJSONArray("parts");
+        File assembly = new File(dir(ctx), f.name + ".part");
+        File seg = new File(dir(ctx), f.name + ".seg");
+        FileOutputStream out = new FileOutputStream(assembly, false);
+        try {
+            byte[] buf = new byte[65536];
+            for (int i = 0; i < parts.length(); i++) {
+                JSONObject part = parts.getJSONObject(i);
+                fetchVerifiedGitee(part.getString("path"), seg, part.getLong("size"),
+                        part.optString("md5", null), progress, attemptDelta, chunk, null);
+                FileInputStream in = new FileInputStream(seg);
+                int n;
+                while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+                in.close();
+                //noinspection ResultOfMethodCallIgnored
+                seg.delete();
+            }
+        } finally {
+            out.close();
+        }
+        if (assembly.length() != f.size) {
+            //noinspection ResultOfMethodCallIgnored
+            assembly.delete();
+            throw new IllegalStateException("拼合大小不对：" + f.name);
+        }
+        if (!f.md5.equalsIgnoreCase(md5Of(assembly))) {
+            //noinspection ResultOfMethodCallIgnored
+            assembly.delete();
+            throw new IllegalStateException("拼合校验失败：" + f.name);
+        }
+        renameInto(assembly, dest);
+    }
 }

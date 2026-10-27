@@ -1,0 +1,18 @@
+{
+  "files": [
+    {"name": "encoder-epoch-99-avg-1.int8.onnx", "path": "zipformer/encoder-epoch-99-avg-1.int8.onnx", "size": 21621684, "md5": "c9ecbe3dfb3e621fd9456c25bf27c567"}
+  ],
+  "delivery": {
+    "encoder-epoch-99-avg-1.int8.onnx": {"method": "split_parts_contents_api", "assembled_size": 21621684, "assembled_md5": "c9ecbe3dfb3e621fd9456c25bf27c567", "parts": []}
+  },
+  "sensevoice": {
+    "version": 1,
+    "files": [
+      {"name": "sensevoice-model.int8.onnx", "size": 239233841, "md5": "0e8e550411d3589be9f0af06f1c8fec3", "repo_path": "sensevoice/model.int8.onnx",
+       "delivery": {"method": "split_parts_contents_api", "part_size": 2097152,
+         "parts": [{"path": "sensevoice/parts/model.int8.onnx.part000", "size": 2097152, "md5": "fixture-part-md5-placeholder"}]}},
+      {"name": "sensevoice-tokens.txt", "size": 315894, "md5": "17cdd9d527315e28553153706d23c719", "repo_path": "sensevoice/tokens.txt",
+       "delivery": {"method": "whole_contents_api"}}
+    ]
+  }
+}

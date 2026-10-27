@@ -26,8 +26,22 @@ $BT/aapt2 link -o $B/base.apk -I $AJAR \
   --java $B/gen \
   -A $SRC/assets \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 34 --version-name 1.17.1 \
+  --version-code 35 --version-name 1.18.0 \
   $B/compiled.zip
+
+echo "[2.5/6] gen BuildInfo（构建提交短号：从 git HEAD 注入，不手写）"
+GIT_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+mkdir -p $B/gen/com/ti/songdu
+cat > $B/gen/com/ti/songdu/BuildInfo.java <<EOF
+package com.ti.songdu;
+// 构建时由 build-manual.sh 生成；源文件在 build 目录内，永不提交。
+public final class BuildInfo {
+    public static final String VERSION_NAME = "1.18.0";
+    public static final int VERSION_CODE = 35;
+    public static final String GIT_SHORT = "$GIT_SHORT";
+    private BuildInfo() {}
+}
+EOF
 
 echo "[2.5/6] gen StoreSecrets（书库令牌：只进 build 目录，永不入库）"
 if [ -f store_token.txt ]; then

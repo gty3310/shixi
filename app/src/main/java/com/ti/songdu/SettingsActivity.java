@@ -19,6 +19,10 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.ti.songdu.recite.AsrModelStore;
+import com.ti.songdu.recite.ModelDownloadUi;
+import com.ti.songdu.recite.RecitePrefs;
+
 /**
  * v1.11.0 总设置页：集中管理每项功能的「默认状态」与「阅读页按钮显示与否」，
  * 以及悬浮字幕的显示意愿、启动行为、透明度与权限。
@@ -311,6 +315,102 @@ public class SettingsActivity extends Activity {
 
         addDivider(root);
 
+        // ---------- 识读组（v1.18.0 双引擎） ----------
+        {
+            LinearLayout titleRow = rowLine();
+            TextView gt = new TextView(this);
+            gt.setText("识读");
+            gt.setTextSize(17);
+            gt.setTypeface(null, Typeface.BOLD);
+            gt.setTextColor(getColor(R.color.ink));
+            gt.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            titleRow.addView(gt);
+            // 小圆形 ⓘ：真实模型名只许出现在说明弹窗与帮助页
+            TextView info = new TextView(this);
+            info.setText("ⓘ");
+            info.setTextSize(17);
+            info.setTextColor(getColor(R.color.muted));
+            info.setPadding(dp(10), 0, dp(2), 0);
+            info.setOnClickListener(v -> ModelDownloadUi.showEngineInfo(this));
+            titleRow.addView(info);
+            root.addView(titleRow);
+        }
+        final TextView[] engineState = new TextView[1];
+        addSegRow(root, "识读引擎", new String[]{
+                        RecitePrefs.LABEL_BASIC, RecitePrefs.LABEL_ADVANCED},
+                RecitePrefs.isAdvanced(this) ? 1 : 0,
+                idx -> {
+                    RecitePrefs.setEngine(this,
+                            idx == 1 ? RecitePrefs.ENGINE_ADVANCED : RecitePrefs.ENGINE_BASIC);
+                    refreshEngineState(engineState[0]);
+                    boolean adv = idx == 1;
+                    boolean ready = adv ? AsrModelStore.isSenseVoiceReady(this)
+                            : AsrModelStore.isReady(this);
+                    if (!ready) {
+                        ModelDownloadUi.showChoice(this, adv, () -> refreshEngineState(engineState[0]));
+                    }
+                });
+        TextView engHint = new TextView(this);
+        engHint.setText(RecitePrefs.LABEL_BASIC + "（" + RecitePrefs.SIZE_BASIC + "）跟随快；"
+                + RecitePrefs.LABEL_ADVANCED + "（" + RecitePrefs.SIZE_ADVANCED + "）准得多。"
+                + "两个都下载时，另一个会复核每一句。");
+        engHint.setTextSize(12);
+        engHint.setTextColor(getColor(R.color.muted));
+        engHint.setPadding(dp(2), dp(2), 0, dp(2));
+        root.addView(engHint);
+        LinearLayout rowEngState = rowLine();
+        TextView labEngState = new TextView(this);
+        labEngState.setText("模型状态");
+        labEngState.setTextSize(13);
+        labEngState.setTextColor(getColor(R.color.muted));
+        labEngState.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        rowEngState.addView(labEngState);
+        engineState[0] = new TextView(this);
+        engineState[0].setTextSize(13);
+        engineState[0].setTextColor(getColor(R.color.accent));
+        rowEngState.addView(engineState[0]);
+        rowEngState.setOnClickListener(v -> {
+            boolean adv = RecitePrefs.isAdvanced(this);
+            boolean ready = adv ? AsrModelStore.isSenseVoiceReady(this)
+                    : AsrModelStore.isReady(this);
+            if (!ready) ModelDownloadUi.showChoice(this, adv,
+                    () -> refreshEngineState(engineState[0]));
+        });
+        root.addView(rowEngState);
+        refreshEngineState(engineState[0]);
+
+        addDivider(root);
+
+        // ---------- 关于组（v1.18.0：更新日志常驻入口＋版本显示） ----------
+        addGroupTitle(root, "关于");
+        LinearLayout rowVer = rowLine();
+        TextView labVer = rowLabel("版本");
+        labVer.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        rowVer.addView(labVer);
+        TextView verVal = new TextView(this);
+        verVal.setText("v" + BuildInfo.VERSION_NAME + " · " + BuildInfo.GIT_SHORT);
+        verVal.setTextSize(14);
+        verVal.setTextColor(getColor(R.color.muted));
+        rowVer.addView(verVal);
+        root.addView(rowVer);
+        LinearLayout rowLog = rowLine();
+        TextView labLog = rowLabel("更新日志");
+        labLog.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        rowLog.addView(labLog);
+        TextView logGo = new TextView(this);
+        logGo.setText("看 ›");
+        logGo.setTextSize(14);
+        logGo.setTextColor(getColor(R.color.accent));
+        rowLog.addView(logGo);
+        rowLog.setOnClickListener(v -> WhatsNew.show(this));
+        root.addView(rowLog);
+
+        addDivider(root);
+
         TextView back = new TextView(this);
         back.setText("← 返回");
         back.setTextSize(15);
@@ -324,7 +424,19 @@ public class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshPermRow(); // 可能刚从系统授权页回来
+        // 识读模型可能刚下载完，状态行在 onCreate 已建时靠引用刷新不便，此处不重建
         refreshVoiceRow(); // 可能刚在选声页改过声音
+    }
+
+    /** v1.18.0 识读模型状态行：当前引擎已下载／去下载 */
+    private void refreshEngineState(TextView tv) {
+        if (tv == null) return;
+        boolean adv = RecitePrefs.isAdvanced(this);
+        boolean ready = adv ? AsrModelStore.isSenseVoiceReady(this)
+                : AsrModelStore.isReady(this);
+        boolean other = adv ? AsrModelStore.isReady(this)
+                : AsrModelStore.isSenseVoiceReady(this);
+        tv.setText(ready ? (other ? "已下载（双引擎）" : "已下载") : "未下载 · 去下载 ›");
     }
 
     /** v1.17.0 朗读声音行：显示《大学》当前所选（未选过时明说） */

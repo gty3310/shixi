@@ -1,0 +1,113 @@
+package com.ti.songdu;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+/**
+ * 更新日志（2026-10-24 用户定版规矩，v1.18.0 首次在时习落地）：
+ * 新版首次打开弹一次（可下滑翻看最近至少 5 版，每版含版本号、发布日期、
+ * 改了什么、试用路径、为什么改）；设置页常驻「更新日志」入口随时可开。
+ * 版本条目随发版在本类追加；仓库 CHANGELOG.md 同步维护。
+ */
+public final class WhatsNew {
+
+    public static final class Entry {
+        public final String version, date;
+        public final String[] changes, tryPaths;
+        public final String why;
+
+        Entry(String v, String d, String[] c, String[] t, String w) {
+            version = v; date = d; changes = c; tryPaths = t; why = w;
+        }
+    }
+
+    /** 最新在前；至少保留最近 5 版 */
+    public static final Entry[] ENTRIES = {
+            new Entry("1.18.0", "2026-10-27",
+                    new String[]{
+                            "识读变双引擎：可在设置里选「基础版 AI」或「高级版 AI」作主引擎",
+                            "两个引擎都下载时，没在用的那个会复核每句：两个都报同一个字读错才更可信",
+                            "判定改加权口径：常用字单台机器报错不再算错；确定错才标红",
+                            "复习页分档：确定错、请你确认的双报字、机器可能听错的、漏读，各自分开",
+                            "旧识读记录作废重建（旧文件留着没删，新版不再显示旧数字）",
+                            "新增更新日志：新版首次打开弹一次，设置里随时能看",
+                    },
+                    new String[]{
+                            "设置 → 识读 → 选「高级版 AI」→ 按提示下载 → 阅读页开「识读」照常领读",
+                            "复习页底部三栏 → 复习：看「请确认」区，点转正或勾销",
+                            "设置 → 关于 → 更新日志：翻看历版说明",
+                    },
+                    "旧判定太冤：常用字被机器听错一大片，复习页全是机器的错不是你的错。"
+                            + "双引擎互核实＋加权判定后，确定错回到个位数，复习只练真会错的字。"),
+            new Entry("1.17.1", "2026-10-25",
+                    new String[]{"《大学》AI 朗读音轨换声重录：换成中文原生男声逐句全本重录"},
+                    new String[]{"播放《大学》→ 首播选声时选 AI 朗读，或设置 → 朗读声音重选"},
+                    "上一版 AI 声是外腔/尖锐，听着不舒服，按合成回执核对新声重录。"),
+            new Entry("1.17.0", "2026-10-25",
+                    new String[]{"《大学》双声音：法师原声与 AI 朗读可选，首播先选声，按书记住选择"},
+                    new String[]{"播放《大学》→ 选声页两选项各带 15 秒试听"},
+                    "同一本书想换个声音读时不用换音频文件，位置还能跨声音对上。"),
+            new Entry("1.16.2", "2026-10-24",
+                    new String[]{"识读模型下载源切到时习自己的模型仓，失败自动回退备用源"},
+                    new String[]{"阅读页开「识读」→ 按提示下载即可，流程不变"},
+                    "原下载源在国内不稳，换到自己的仓更可靠。"),
+            new Entry("1.16.1", "2026-10-24",
+                    new String[]{"帮助页新增「识读：它听你读」一节；设置页可隐藏阅读页的识读按钮"},
+                    new String[]{"主页 → 帮助 → 识读一节；设置 → 阅读 → 「识读」按钮显隐"},
+                    "识读是新功能，得有地方讲清它怎么判错、什么不算错。"),
+            new Entry("1.16.0", "2026-10-24",
+                    new String[]{
+                            "识读上线：你出声领读，App 听着跟随，读错音节的字拼音标红",
+                            "底部改三栏：听／历史记录／复习；复习页收录读不熟的字",
+                            "点句可写笔记、三色标记",
+                    },
+                    new String[]{"阅读页开「识读」领读；读完去底部「复习」看错字"},
+                    "遍数之外还要知道哪些字真没读对，识读就是为此而建。"),
+    };
+
+    private static final String PREFS = "app_prefs";
+    private static final String KEY_SEEN = "whatsnew_seen_code";
+
+    private WhatsNew() {}
+
+    /** 新版首次打开弹一次（MainActivity 冷启动调用） */
+    public static void maybeShowOnLaunch(Activity act) {
+        SharedPreferences sp = act.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (sp.getInt(KEY_SEEN, 0) < BuildInfo.VERSION_CODE) {
+            sp.edit().putInt(KEY_SEEN, BuildInfo.VERSION_CODE).apply();
+            show(act);
+        }
+    }
+
+    public static void show(Activity act) {
+        StringBuilder sb = new StringBuilder();
+        for (Entry e : ENTRIES) {
+            sb.append("v").append(e.version).append(" · ").append(e.date).append("\n");
+            sb.append("更新了哪里\n");
+            for (String c : e.changes) sb.append("• ").append(c).append("\n");
+            sb.append("想试这些功能，点哪里\n");
+            for (String t : e.tryPaths) sb.append("• ").append(t).append("\n");
+            sb.append("为什么改\n").append(e.why).append("\n\n");
+        }
+        TextView tv = new TextView(act);
+        tv.setText(sb.toString().trim());
+        tv.setTextSize(14);
+        tv.setPadding(dp(act, 20), dp(act, 12), dp(act, 20), dp(act, 8));
+        tv.setLineSpacing(0, 1.35f);
+        ScrollView sv = new ScrollView(act);
+        sv.addView(tv);
+        new AlertDialog.Builder(act)
+                .setTitle("更新日志")
+                .setView(sv)
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
+    private static int dp(Context c, int v) {
+        return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
+    }
+}

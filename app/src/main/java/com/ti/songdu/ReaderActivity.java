@@ -28,7 +28,9 @@ import java.util.List;
 import com.ti.songdu.recite.AsrModelStore;
 import com.ti.songdu.recite.ReciteData;
 import com.ti.songdu.recite.ReciteSession;
-import com.ti.songdu.recite.ReciteStats;
+import com.ti.songdu.recite.ModelDownloadUi;
+import com.ti.songdu.recite.RecitePrefs;
+import com.ti.songdu.recite.ReciteStatsV2;
 
 /**
  * v1.4 阅读页：正文在 WebView 里用本地模板（assets/reader.html）＋内容包 JSON 渲染，
@@ -943,7 +945,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 9021);
             return;
         }
-        if (!AsrModelStore.isReady(this)) {
+        if (!RecitePrefs.primaryReady(this)) {
             askDownloadModel();
             return;
         }
@@ -958,7 +960,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             recitePending = false;
             if (grantResults.length > 0
                     && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                if (AsrModelStore.isReady(this)) startRecite();
+                if (RecitePrefs.primaryReady(this)) startRecite();
                 else askDownloadModel();
             } else {
                 Toast.makeText(this, "识读需要麦克风权限", Toast.LENGTH_SHORT).show();
@@ -967,45 +969,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     }
 
     private void askDownloadModel() {
-        new AlertDialog.Builder(this)
-                .setTitle("识读需要下载识别模型")
-                .setMessage("从时习的模型仓下载离线语音识别模型（约 25MB），只下一次，之后断网也能用。")
-                .setPositiveButton("下载", (d, w) -> downloadModel())
-                .setNegativeButton("取消", null)
-                .show();
-    }
-
-    private void downloadModel() {
-        final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
-        pd.setTitle("正在下载识别模型");
-        pd.setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL);
-        pd.setMax(100);
-        pd.setCancelable(false);
-        pd.show();
-        new Thread(() -> AsrModelStore.ensure(this, new AsrModelStore.Callback() {
-            @Override
-            public void onProgress(long done, long total) {
-                runOnUiThread(() -> pd.setProgress(
-                        total > 0 ? (int) (done * 100 / total) : 0));
-            }
-
-            @Override
-            public void onDone() {
-                runOnUiThread(() -> {
-                    pd.dismiss();
-                    startRecite();
-                });
-            }
-
-            @Override
-            public void onError(String message) {
-                runOnUiThread(() -> {
-                    pd.dismiss();
-                    Toast.makeText(ReaderActivity.this,
-                            "模型下载失败：" + message, Toast.LENGTH_LONG).show();
-                });
-            }
-        })).start();
+        ModelDownloadUi.ensureForEngine(this, RecitePrefs.isAdvanced(this), this::startRecite);
     }
 
     private void startRecite() {
@@ -1016,7 +980,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         }
         if (reciteSession == null) {
             reciteSession = new ReciteSession(this, buildReciteData(),
-                    ReciteStats.get(this), new ReciteSession.Listener() {
+                    ReciteStatsV2.get(this), new ReciteSession.Listener() {
                         @Override
                         public void onDisplaySentence(int flat) {
                             if (!reciteOn) return;
