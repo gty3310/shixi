@@ -29,6 +29,15 @@ import java.util.Locale;
  * 条（已下载字节/总字节＋百分比）、可取消；失败切到失败态（原因＋重试＋
  * 关闭），不再是闪一下就没的 Toast，也不再用不可取消的 ProgressDialog。
  * 已有下载在跑时打开本对话框，直接挂到那次任务的进度上。
+ *
+ * v1.20.4：计划构建完成前是前置阶段（取文件索引/清单）——对话框显示
+ * 「正在获取文件清单…」＋不确定型进度条，不再是 0.0/0.0 的假死观感；
+ * 前置阶段由 AsrModelStore 侧 90 秒总时长上限兜底、到时必进失败态。
+ * 同版补「只用基础版」出口：引擎偏好是高级版而高级模型未下载时，选项里
+ * 恒有一项基础版出口（基础版未下＝「只用基础版 AI（约 25 MB）」，只下基
+ * 础版；已下＝「改用基础版 AI（已下载，立即识读）」）——点它即把引擎偏
+ * 好切回基础版并持久化，此后点识读不再弹高级版下载提示；想再用高级版，
+ * 设置页识读引擎切到高级版即可重新下载（拒绝不封死）。
  */
 public final class ModelDownloadUi {
 
@@ -79,11 +88,22 @@ public final class ModelDownloadUi {
     private static final class Opt {
         final String label;
         final boolean basic, sv;
+        /** 出口选项：不下载高级版，切回基础版引擎（偏好持久化） */
+        final boolean useBasic;
 
         Opt(String label, boolean basic, boolean sv) {
+            this(label, basic, sv, false);
+        }
+
+        Opt(String label, boolean basic, boolean sv, boolean useBasic) {
             this.label = label;
             this.basic = basic;
             this.sv = sv;
+            this.useBasic = useBasic;
+        }
+
+        static Opt useBasic(String label) {
+            return new Opt(label, false, false, true);
         }
     }
 
@@ -103,9 +123,15 @@ public final class ModelDownloadUi {
                         + "一起下载（约 264 MB）", true, true));
                 opts.add(new Opt("只下载" + RecitePrefs.LABEL_ADVANCED
                         + "（" + RecitePrefs.SIZE_ADVANCED + "）", false, true));
+                // 出口：不下高级版——只下基础版并切回基础版引擎，此后不再催
+                opts.add(Opt.useBasic("只用" + RecitePrefs.LABEL_BASIC
+                        + "（" + RecitePrefs.SIZE_BASIC + "）"));
             } else {
                 opts.add(new Opt("下载" + RecitePrefs.LABEL_ADVANCED
                         + "（" + RecitePrefs.SIZE_ADVANCED + "）", false, true));
+                // 出口：基础版已就绪——改用基础版，立即识读，不再催高级版
+                opts.add(Opt.useBasic("改用" + RecitePrefs.LABEL_BASIC
+                        + "（已下载，立即识读）"));
             }
         } else {
             return null;
@@ -174,7 +200,10 @@ public final class ModelDownloadUi {
                     b.setText(o.label);
                     b.setAllCaps(false);
                     b.setTextSize(15);
-                    b.setOnClickListener(v -> startDownload(o));
+                    b.setOnClickListener(v -> {
+                        if (o.useBasic) chooseBasicOnly();
+                        else startDownload(o);
+                    });
                     optionsBox.addView(b);
                 }
                 Button cancelChoice = new Button(act);
@@ -258,10 +287,27 @@ public final class ModelDownloadUi {
             build();
             optionsBox.setVisibility(View.GONE);
             progressBox.setVisibility(View.VISIBLE);
-            progressText.setText("正在下载…");
+            bar.setIndeterminate(true);
+            progressText.setText("正在获取文件清单…");
             watched = AsrModelStore.active;
             AsrModelStore.addStateListener(listener);
             dialog.show();
+        }
+
+        /**
+         * 「只用基础版」出口：把引擎偏好切回基础版并持久化（此后点识读按
+         * 基础版走、不再弹高级版提示）；基础版已就绪直接完成回调开工，
+         * 未就绪只下基础版、下完照常回调。
+         */
+        private void chooseBasicOnly() {
+            RecitePrefs.setEngine(act, RecitePrefs.ENGINE_BASIC);
+            if (AsrModelStore.isReady(act)) {
+                finished = true;
+                close();
+                if (onReady != null) onReady.run();
+            } else {
+                startDownload(new Opt("", true, false));
+            }
         }
 
         void startDownload(Opt o) {
@@ -271,8 +317,10 @@ public final class ModelDownloadUi {
             optionsBox.setVisibility(View.GONE);
             failedBox.setVisibility(View.GONE);
             progressBox.setVisibility(View.VISIBLE);
-            bar.setProgress(0);
-            progressText.setText("正在下载…");
+            // 每次下载都先走前置阶段（取清单/建计划）：先亮阶段文案＋不
+            // 确定型进度，计划就绪后 onState 切回确定型字节进度
+            bar.setIndeterminate(true);
+            progressText.setText("正在获取文件清单…");
             if (!dialog.isShowing()) dialog.show();
             // 先启动任务（ensureSet 入口即把 active 换成本次 DlState），再注册
             // 监听：addStateListener 会立即回放当前 active，watched 就此锁定，
@@ -286,11 +334,17 @@ public final class ModelDownloadUi {
         private void onState(AsrModelStore.DlState s) {
             if (finished) return;
             if (s.running) {
-                int permille = s.total > 0 ? (int) (s.done * 1000 / s.total) : 0;
-                bar.setProgress(permille);
-                int pct = s.total > 0 ? (int) (s.done * 100 / s.total) : 0;
-                progressText.setText("已下载 " + fmtBytes(s.done) + " / " + fmtBytes(s.total)
-                        + " · " + pct + "%");
+                if (s.preparing) {
+                    bar.setIndeterminate(true);
+                    progressText.setText("正在获取文件清单…");
+                } else {
+                    bar.setIndeterminate(false);
+                    int permille = s.total > 0 ? (int) (s.done * 1000 / s.total) : 0;
+                    bar.setProgress(permille);
+                    int pct = s.total > 0 ? (int) (s.done * 100 / s.total) : 0;
+                    progressText.setText("已下载 " + fmtBytes(s.done) + " / " + fmtBytes(s.total)
+                            + " · " + pct + "%");
+                }
             } else if (s.cancelled) {
                 finished = true;
                 close();

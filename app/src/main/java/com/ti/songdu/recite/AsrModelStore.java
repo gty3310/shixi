@@ -1,6 +1,7 @@
 package com.ti.songdu.recite;
 
 import android.content.Context;
+import android.util.Log;
 
 import com.ti.songdu.Bookstore;
 
@@ -16,8 +17,10 @@ import java.net.URL;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -43,6 +46,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *    入 done），done 随每块解码字节推进、单片重试时回退本次增量，不虚报。
  *  - 活动下载状态对外发布（active＋StateListener），设置页状态行与下载对
  *    话框都读同一份状态；支持取消（片粒度生效）。
+ *
+ * v1.20.4 修复（真机实报「仓内找不到文件：sensevoice/model.int8.onnx」）：
+ * 计划构建逻辑抽到纯逻辑类 ModelPlans 并改正顺序——先读 delivery 判定
+ * 整件/分片，分片文件不再按整文件名查 sha（仓里只有分片、必然查空），
+ * 改逐片校验命中；基础版 encoder 同病此前被 HF 兜底静默掩盖，现 Gitee
+ * 侧原始原因记入状态（DlState.giteeError）与日志，HF 最终失败时错误呈
+ * 现必须带上它。另：清单/索引等前置阶段对外发布 preparing 标记供 UI 显
+ * 示「正在获取文件清单…」，且重试总时长上限 90 秒、到时必进失败态，不
+ * 再出现无限 0.0/0.0 假死。
  */
 public final class AsrModelStore {
 
@@ -116,6 +128,10 @@ public final class AsrModelStore {
         public volatile long done, total;
         public volatile boolean failed, cancelled;
         public volatile String error;
+        /** 前置阶段（取文件索引/清单、构建计划）进行中：UI 显示阶段文案＋不确定型进度 */
+        public volatile boolean preparing;
+        /** Gitee 路线先前失败的原始原因（改走 HF 兜底时保留，错误呈现不许只报 HF 的错） */
+        public volatile String giteeError;
     }
 
     public static volatile DlState active;
@@ -158,6 +174,30 @@ public final class AsrModelStore {
 
     private static void checkCancelled() throws Cancelled {
         if (cancelRequested) throw new Cancelled();
+    }
+
+    // ---------- 前置阶段（取索引/清单/建计划）总时长上限 ----------
+
+    private static final String TAG = "AsrModelStore";
+    /** 前置阶段重试总时长上限：到时必抛 StageTimeout 进失败态，不许无限假死 */
+    private static final long STAGE_TIMEOUT_MS = 90_000;
+    private static volatile long stageDeadlineMs;
+
+    private static final class StageTimeout extends Exception {
+        StageTimeout() {
+            super("获取文件清单超时，请检查网络后重试");
+        }
+    }
+
+    private static void checkStageDeadline() throws StageTimeout {
+        if (stageDeadlineMs > 0 && System.currentTimeMillis() > stageDeadlineMs) {
+            throw new StageTimeout();
+        }
+    }
+
+    private static String errMsg(Exception e) {
+        String m = e.getMessage();
+        return m == null || m.isEmpty() ? e.getClass().getSimpleName() : m;
     }
 
     // ---------- 就绪判定 ----------
@@ -272,14 +312,34 @@ public final class AsrModelStore {
         };
     }
 
-    // ---------- 下载计划 ----------
+    // ---------- 下载计划（构建逻辑在 ModelPlans，本类只做 Context 适配） ----------
 
-    private static final class FilePlan {
-        ModelFile f;
-        String repoPath;
-        String sha; // git blob sha（trees 索引）
-        Map<String, String> shaByPath; // 分片按 path 查 sha 用
-        JSONArray parts; // null＝整文件
+    private static ModelPlans.Spec[] toSpecs(ModelFile[] files) {
+        ModelPlans.Spec[] out = new ModelPlans.Spec[files.length];
+        for (int i = 0; i < files.length; i++) {
+            out[i] = new ModelPlans.Spec(files[i].name, files[i].size, files[i].md5);
+        }
+        return out;
+    }
+
+    private static Set<String> readyNames(Context ctx, ModelFile[] files) {
+        Set<String> ready = new HashSet<>();
+        for (ModelFile f : files) if (fileReady(ctx, f)) ready.add(f.name);
+        return ready;
+    }
+
+    private static List<ModelPlans.Plan> basicPlans(Context ctx, JSONObject manifest,
+                                                    Map<String, String> shaByPath)
+            throws Exception {
+        return ModelPlans.basicPlans(toSpecs(FILES), readyNames(ctx, FILES),
+                manifest, shaByPath);
+    }
+
+    private static List<ModelPlans.Plan> svPlans(Context ctx, JSONObject manifest,
+                                                 Map<String, String> shaByPath)
+            throws Exception {
+        return ModelPlans.svPlans(toSpecs(SV_FILES), readyNames(ctx, SV_FILES),
+                manifest, shaByPath);
     }
 
     /**
@@ -291,8 +351,10 @@ public final class AsrModelStore {
         st.running = true;
         st.wantBasic = wantBasic;
         st.wantSv = wantSv;
+        st.preparing = true;
         active = st;
         cancelRequested = false;
+        stageDeadlineMs = System.currentTimeMillis() + STAGE_TIMEOUT_MS;
         publishState();
         try {
             //noinspection ResultOfMethodCallIgnored
@@ -306,20 +368,30 @@ public final class AsrModelStore {
             } catch (Exception e) {
                 manifestErr = e;
             }
-            List<FilePlan> basicPlanList = new ArrayList<>();
-            List<FilePlan> svPlanList = new ArrayList<>();
+            List<ModelPlans.Plan> basicPlanList = new ArrayList<>();
+            List<ModelPlans.Plan> svPlanList = new ArrayList<>();
             boolean basicViaHf = false;
+            String basicGiteeErr = null;
             if (wantBasic && !isReady(ctx)) {
                 if (manifest != null) {
                     try {
                         basicPlanList.addAll(basicPlans(ctx, manifest, shaByPath));
                     } catch (Exception e) {
+                        // 不许静默掩盖：Gitee 侧原始原因记入状态与日志，
+                        // HF 兜底最终失败时错误呈现必须带上它（runBasicHf）
                         basicPlanList.clear();
                         basicViaHf = true;
+                        basicGiteeErr = errMsg(e);
                     }
                 } else {
                     basicViaHf = true;
+                    if (manifestErr != null) basicGiteeErr = errMsg(manifestErr);
                 }
+            }
+            if (basicGiteeErr != null) {
+                st.giteeError = basicGiteeErr;
+                Log.w(TAG, "基础版 Gitee 路线不可用，改走 HF 兜底：" + basicGiteeErr);
+                publishState();
             }
             if (wantSv && !isSenseVoiceReady(ctx)) {
                 if (manifest == null) {
@@ -329,11 +401,11 @@ public final class AsrModelStore {
                 svPlanList.addAll(svPlans(ctx, manifest, shaByPath));
             }
             long total = 0, credited = 0;
-            for (FilePlan p : basicPlanList) {
+            for (ModelPlans.Plan p : basicPlanList) {
                 total += p.f.size;
                 credited += creditedBytes(ctx, p);
             }
-            for (FilePlan p : svPlanList) {
+            for (ModelPlans.Plan p : svPlanList) {
                 total += p.f.size;
                 credited += creditedBytes(ctx, p);
             }
@@ -341,21 +413,28 @@ public final class AsrModelStore {
                 for (ModelFile f : FILES) if (!fileReady(ctx, f)) total += f.size;
             }
             Tracker tr = new Tracker(credited, total, cb, st);
+            st.preparing = false;
+            stageDeadlineMs = 0;
             tr.fire();
             if (basicViaHf) {
-                ensureBasicHf(ctx, tr);
-            } else {
+                runBasicHf(ctx, tr, basicGiteeErr);
+            } else if (!basicPlanList.isEmpty()) {
                 try {
-                    for (FilePlan p : basicPlanList) executePlan(ctx, p, tr);
+                    for (ModelPlans.Plan p : basicPlanList) executePlan(ctx, p, tr);
                 } catch (Cancelled c) {
                     throw c;
                 } catch (Exception e) {
-                    // Gitee 路线中途失败：基础版未落盘文件改走 HF 兜底（只补
-                    // 缺失整文件；回退段进度可能短暂虚高，完成时由 complete 归位）
-                    ensureBasicHf(ctx, tr);
+                    // Gitee 路线中途失败：原始原因同样记入状态，基础版未落盘
+                    // 文件改走 HF 兜底（只补缺失整文件；回退段进度可能短暂
+                    // 虚高，完成时由 complete 归位）
+                    basicGiteeErr = errMsg(e);
+                    st.giteeError = basicGiteeErr;
+                    Log.w(TAG, "基础版 Gitee 路线中途失败，改走 HF 兜底：" + basicGiteeErr);
+                    publishState();
+                    runBasicHf(ctx, tr, basicGiteeErr);
                 }
             }
-            for (FilePlan p : svPlanList) executePlan(ctx, p, tr);
+            for (ModelPlans.Plan p : svPlanList) executePlan(ctx, p, tr);
             if (wantBasic && !isReady(ctx)) throw new IllegalStateException("基础版模型不完整");
             if (wantSv && !isSenseVoiceReady(ctx)) throw new IllegalStateException("高级版模型不完整");
             tr.complete();
@@ -364,11 +443,15 @@ public final class AsrModelStore {
             if (cb != null) cb.onDone();
         } catch (Cancelled c) {
             st.running = false;
+            st.preparing = false;
+            stageDeadlineMs = 0;
             st.cancelled = true;
             publishState();
             if (cb != null) cb.onError("已取消");
         } catch (Exception e) {
             st.running = false;
+            st.preparing = false;
+            stageDeadlineMs = 0;
             st.failed = true;
             st.error = e.getMessage() == null ? "下载失败" : e.getMessage();
             publishState();
@@ -376,97 +459,20 @@ public final class AsrModelStore {
         }
     }
 
-    private static void executePlan(Context ctx, FilePlan p, Tracker tr) throws Exception {
+    private static void executePlan(Context ctx, ModelPlans.Plan p, Tracker tr) throws Exception {
         checkCancelled();
         if (p.parts != null) fetchSplit(ctx, p, tr);
         else fetchWhole(ctx, p, tr);
     }
 
-    /** 基础版计划：清单 files 按 basename 索引，逐件与内置校验核对 */
-    private static List<FilePlan> basicPlans(Context ctx, JSONObject manifest,
-                                             Map<String, String> shaByPath) throws Exception {
-        Map<String, JSONObject> byName = new HashMap<>();
-        JSONArray files = manifest.getJSONArray("files");
-        for (int i = 0; i < files.length(); i++) {
-            JSONObject o = files.getJSONObject(i);
-            String path = o.getString("path");
-            byName.put(path.substring(path.lastIndexOf('/') + 1), o);
-        }
-        JSONObject delivery = manifest.optJSONObject("delivery");
-        List<FilePlan> out = new ArrayList<>();
-        for (ModelFile f : FILES) {
-            if (fileReady(ctx, f)) continue;
-            JSONObject fe = byName.get(f.name);
-            if (fe == null || fe.getLong("size") != f.size
-                    || !f.md5.equalsIgnoreCase(fe.optString("md5", ""))) {
-                throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
-            }
-            FilePlan p = new FilePlan();
-            p.f = f;
-            p.repoPath = fe.getString("path");
-            p.sha = shaByPath.get(p.repoPath);
-            p.shaByPath = shaByPath;
-            if (p.sha == null) {
-                throw new IllegalStateException("仓内找不到文件：" + p.repoPath);
-            }
-            JSONObject del = delivery == null ? null : delivery.optJSONObject(f.name);
-            if (del != null && "split_parts_contents_api".equals(del.optString("method"))) {
-                long assembledSize = del.getLong("assembled_size");
-                String assembledMd5 = del.getString("assembled_md5");
-                if (assembledSize != f.size || !f.md5.equalsIgnoreCase(assembledMd5)) {
-                    throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
-                }
-                p.parts = del.getJSONArray("parts");
-            }
-            out.add(p);
-        }
-        return out;
-    }
-
-    /** 高级版计划：清单 sensevoice 键驱动，逐件与内置校验核对 */
-    private static List<FilePlan> svPlans(Context ctx, JSONObject manifest,
-                                          Map<String, String> shaByPath) throws Exception {
-        JSONObject sv = manifest.optJSONObject("sensevoice");
-        if (sv == null) throw new IllegalStateException("模型清单缺少高级版条目");
-        Map<String, JSONObject> byName = new HashMap<>();
-        JSONArray files = sv.getJSONArray("files");
-        for (int i = 0; i < files.length(); i++) {
-            JSONObject o = files.getJSONObject(i);
-            byName.put(o.getString("name"), o);
-        }
-        List<FilePlan> out = new ArrayList<>();
-        for (ModelFile f : SV_FILES) {
-            if (fileReady(ctx, f)) continue;
-            JSONObject fe = byName.get(f.name);
-            if (fe == null || fe.getLong("size") != f.size
-                    || !f.md5.equalsIgnoreCase(fe.optString("md5", ""))) {
-                throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
-            }
-            FilePlan p = new FilePlan();
-            p.f = f;
-            p.repoPath = fe.getString("repo_path");
-            p.sha = shaByPath.get(p.repoPath);
-            p.shaByPath = shaByPath;
-            if (p.sha == null) {
-                throw new IllegalStateException("仓内找不到文件：" + p.repoPath);
-            }
-            JSONObject del = fe.optJSONObject("delivery");
-            if (del != null && "split_parts_contents_api".equals(del.optString("method"))) {
-                p.parts = del.getJSONArray("parts");
-            }
-            out.add(p);
-        }
-        return out;
-    }
-
     // ---------- 分片落盘与续传 ----------
 
-    private static File partsDir(Context ctx, ModelFile f) {
-        return new File(dir(ctx), "parts-" + f.name);
+    private static File partsDir(Context ctx, String name) {
+        return new File(dir(ctx), "parts-" + name);
     }
 
-    private static File partFile(Context ctx, ModelFile f, int idx) {
-        return new File(partsDir(ctx, f),
+    private static File partFile(Context ctx, String name, int idx) {
+        return new File(partsDir(ctx, name),
                 String.format(java.util.Locale.US, "part%03d", idx));
     }
 
@@ -476,12 +482,12 @@ public final class AsrModelStore {
     }
 
     /** 已落盘合格分片的字节数（进度先行计入） */
-    private static long creditedBytes(Context ctx, FilePlan p) throws Exception {
+    private static long creditedBytes(Context ctx, ModelPlans.Plan p) throws Exception {
         if (p.parts == null) return 0;
         long sum = 0;
         for (int i = 0; i < p.parts.length(); i++) {
             JSONObject part = p.parts.getJSONObject(i);
-            if (partValid(partFile(ctx, p.f, i), part.getLong("size"),
+            if (partValid(partFile(ctx, p.f.name, i), part.getLong("size"),
                     part.optString("md5", null))) {
                 sum += part.getLong("size");
             }
@@ -489,7 +495,7 @@ public final class AsrModelStore {
         return sum;
     }
 
-    private static void fetchWhole(Context ctx, FilePlan p, Tracker tr) throws Exception {
+    private static void fetchWhole(Context ctx, ModelPlans.Plan p, Tracker tr) throws Exception {
         File tmp = new File(dir(ctx), p.f.name + ".dl");
         fetchVerifiedBlob(p.sha, p.repoPath, tmp, p.f.size, p.f.md5, tr);
         renameInto(tmp, file(ctx, p.f.name));
@@ -499,15 +505,15 @@ public final class AsrModelStore {
      * 分片文件：逐片取到 parts-<文件名>/partNNN 并逐片验 size＋md5（合格片
      * 保留，失败/取消后重入时复用）；全片齐后按序拼合、验整件、改名、清分片。
      */
-    private static void fetchSplit(Context ctx, FilePlan p, Tracker tr) throws Exception {
+    private static void fetchSplit(Context ctx, ModelPlans.Plan p, Tracker tr) throws Exception {
         //noinspection ResultOfMethodCallIgnored
-        partsDir(ctx, p.f).mkdirs();
+        partsDir(ctx, p.f.name).mkdirs();
         for (int i = 0; i < p.parts.length(); i++) {
             checkCancelled();
             JSONObject part = p.parts.getJSONObject(i);
             long size = part.getLong("size");
             String md5 = part.optString("md5", null);
-            File pf = partFile(ctx, p.f, i);
+            File pf = partFile(ctx, p.f.name, i);
             if (partValid(pf, size, md5)) continue;
             String partPath = part.getString("path");
             fetchVerifiedBlob(p.shaByPath.get(partPath), partPath, pf, size, md5, tr);
@@ -517,7 +523,7 @@ public final class AsrModelStore {
         try {
             byte[] buf = new byte[65536];
             for (int i = 0; i < p.parts.length(); i++) {
-                FileInputStream in = new FileInputStream(partFile(ctx, p.f, i));
+                FileInputStream in = new FileInputStream(partFile(ctx, p.f.name, i));
                 int n;
                 while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
                 in.close();
@@ -536,7 +542,7 @@ public final class AsrModelStore {
             throw new IllegalStateException("拼合校验失败：" + p.f.name);
         }
         renameInto(assembly, file(ctx, p.f.name));
-        deleteRecursive(partsDir(ctx, p.f));
+        deleteRecursive(partsDir(ctx, p.f.name));
     }
 
     private static void deleteRecursive(File f) {
@@ -591,15 +597,17 @@ public final class AsrModelStore {
         Exception last = null;
         for (int attempt = 1; attempt <= GITEE_ATTEMPTS; attempt++) {
             checkCancelled();
+            checkStageDeadline();
             if (attempt > 1) sleepGitee(GITEE_RETRY_DELAYS_MS[attempt - 2]);
             try {
                 Map<String, String> map = new HashMap<>();
                 JSONObject root = fetchTreeJson("master");
                 collectTree(root, "", map, true);
                 return map;
-            } catch (Cancelled c) {
+            } catch (Cancelled | StageTimeout c) {
                 throw c;
             } catch (Exception e) {
+                checkStageDeadline();
                 last = e;
             }
         }
@@ -608,6 +616,7 @@ public final class AsrModelStore {
 
     private static void collectTree(JSONObject tree, String prefix,
                                     Map<String, String> map, boolean top) throws Exception {
+        checkStageDeadline();
         JSONArray arr = tree.getJSONArray("tree");
         for (int i = 0; i < arr.length(); i++) {
             JSONObject e = arr.getJSONObject(i);
@@ -656,13 +665,15 @@ public final class AsrModelStore {
         Exception last = null;
         for (int attempt = 1; attempt <= GITEE_ATTEMPTS; attempt++) {
             checkCancelled();
+            checkStageDeadline();
             if (attempt > 1) sleepGitee(GITEE_RETRY_DELAYS_MS[attempt - 2]);
             try {
                 Bookstore.downloadBlobFile(MODELS_REPO, sha, tmp, null, null);
                 return new JSONObject(readTextFile(tmp));
-            } catch (Cancelled c) {
+            } catch (Cancelled | StageTimeout c) {
                 throw c;
             } catch (Exception e) {
+                checkStageDeadline();
                 last = e;
             } finally {
                 //noinspection ResultOfMethodCallIgnored
@@ -705,6 +716,25 @@ public final class AsrModelStore {
     }
 
     // ---------- 兜底：HuggingFace 整文件路线（基础版 Gitee 路线失败时） ----------
+
+    /**
+     * HF 兜底入口：兜底最终失败时，错误呈现必须包含 Gitee 侧原始原因
+     * （giteeErr），不许只报 HF 的错——v1.20.4 前基础版 Gitee 路线同病被
+     * 静默掩盖的教训。
+     */
+    private static void runBasicHf(Context ctx, Tracker tr, String giteeErr) throws Exception {
+        try {
+            ensureBasicHf(ctx, tr);
+        } catch (Cancelled c) {
+            throw c;
+        } catch (Exception hfErr) {
+            if (giteeErr != null) {
+                throw new IllegalStateException("备用路线下载失败：" + errMsg(hfErr)
+                        + "（Gitee 路线先前失败：" + giteeErr + "）");
+            }
+            throw hfErr;
+        }
+    }
 
     private static void ensureBasicHf(Context ctx, Tracker tr) throws Exception {
         for (ModelFile f : FILES) {

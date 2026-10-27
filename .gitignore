@@ -10,3 +10,7 @@ store_token.txt
 # v1.16.0 识读原生库（sherpa-onnx JNI + onnxruntime，约 27MB）：由 fetch-asr-deps.sh
 # 从官方 release 拉取，不入库；识读模型文件更不入库（App 内按需下载到 files/）
 asr-libs/
+
+# v1.20.4 model_harness 桌面依赖与产物（jar 二进制不入库）
+tools/model_harness/lib/
+tools/model_harness/out/

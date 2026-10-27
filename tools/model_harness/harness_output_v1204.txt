@@ -1,0 +1,16 @@
+git trees 索引：132 条（真实仓快照）
+  PASS trees 索引非空且含清单
+  PASS 清单获取并解析成功
+  PASS 基础版计划构建成功、共 4 件
+  PASS 基础版分片文件 encoder-epoch-99-avg-1.int8.onnx：11 片、逐片 sha 全命中
+  PASS 基础版整文件 decoder-epoch-99-avg-1.int8.onnx：sha 命中
+  PASS 基础版整文件 joiner-epoch-99-avg-1.int8.onnx：sha 命中
+  PASS 基础版整文件 tokens.txt：sha 命中
+  PASS 高级版计划构建成功、共 2 件
+  PASS 高级版分片文件 sensevoice-model.int8.onnx：115 片、逐片 sha 全命中、片大小合计＝内置整件大小
+  PASS 高级版整文件 sensevoice-tokens.txt：sha 命中
+  PASS 只用基础版路径：计划只含基础版 4 件、无任何高级版文件
+  PASS 基础版已就绪时计划为空（点识读直接开工、不再弹下载）
+  PASS 负例 SV 缺 part037：报错且点名该片（实际：仓内找不到分片：sensevoice/model.int8.onnx.part037）
+  PASS 负例基础版缺 encoder part03：报错且点名该片（实际：仓内找不到分片：asr-zh-14m/encoder-epoch-99-avg-1.int8.onnx.part03）
+== ModelPlanHarness: 14 passed, 0 failed ==

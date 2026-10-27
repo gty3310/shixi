@@ -329,7 +329,7 @@ public class SettingsActivity extends Activity {
             root.addView(titleRow);
         }
         final TextView[] engineState = new TextView[1];
-        addSegRow(root, "识读引擎", new String[]{
+        engineChips = addSegRow(root, "识读引擎", new String[]{
                         RecitePrefs.LABEL_BASIC, RecitePrefs.LABEL_ADVANCED},
                 RecitePrefs.isAdvanced(this) ? 1 : 0,
                 idx -> {
@@ -367,8 +367,15 @@ public class SettingsActivity extends Activity {
             boolean adv = RecitePrefs.isAdvanced(this);
             boolean ready = adv ? AsrModelStore.isSenseVoiceReady(this)
                     : AsrModelStore.isReady(this);
-            if (!ready) ModelDownloadUi.showChoice(this, adv,
-                    () -> refreshEngineState(engineState[0]));
+            if (!ready) {
+                ModelDownloadUi.showChoice(this, adv,
+                        () -> refreshEngineState(engineState[0]));
+            } else if (!adv && !AsrModelStore.isSenseVoiceReady(this)) {
+                // 基础版已就绪、高级版未下载：保留日后自取高级版的入口
+                // （对话框含「下载高级版」；拒绝过也不是永久封死）
+                ModelDownloadUi.showChoice(this, true,
+                        () -> refreshEngineState(engineState[0]));
+            }
         });
         root.addView(rowEngState);
         refreshEngineState(engineState[0]);
@@ -429,8 +436,11 @@ public class SettingsActivity extends Activity {
     }
 
     /** v1.18.0 识读模型状态行：当前引擎已下载／去下载
-     *  v1.20.1：有下载在跑时同步显示进度（与下载对话框同一份状态） */
+     *  v1.20.1：有下载在跑时同步显示进度（与下载对话框同一份状态）
+     *  v1.20.4：刷新时一并按当前偏好回刷引擎分段控件（对话框里选了「只用
+     *  基础版」出口切回基础版时，控件须与持久化偏好一致） */
     private TextView engineStateView;
+    private TextView[] engineChips;
     private final android.os.Handler enginePollHandler = new android.os.Handler();
     private final Runnable enginePoll = new Runnable() {
         @Override
@@ -445,6 +455,9 @@ public class SettingsActivity extends Activity {
     private void refreshEngineState(TextView tv) {
         if (tv == null) return;
         engineStateView = tv;
+        if (engineChips != null) {
+            styleChips(engineChips, RecitePrefs.isAdvanced(this) ? 1 : 0);
+        }
         if (AsrModelStore.isDownloading()) {
             AsrModelStore.DlState s = AsrModelStore.active;
             int pct = s != null && s.total > 0 ? (int) (s.done * 100 / s.total) : 0;
@@ -456,7 +469,16 @@ public class SettingsActivity extends Activity {
                 : AsrModelStore.isReady(this);
         boolean other = adv ? AsrModelStore.isReady(this)
                 : AsrModelStore.isSenseVoiceReady(this);
-        tv.setText(ready ? (other ? "已下载（双引擎）" : "已下载") : "未下载 · 去下载 ›");
+        if (!ready) {
+            tv.setText("未下载 · 去下载 ›");
+        } else if (other) {
+            tv.setText("已下载（双引擎）");
+        } else if (!adv) {
+            // 基础版在用、高级版未下载：点行可日后自取高级版
+            tv.setText("已下载 · 高级版未下载 ›");
+        } else {
+            tv.setText("已下载");
+        }
     }
 
     /** v1.20.0 朗读声音一行（按书）：左标签（组内首行带「朗读声音」，续行留空
@@ -614,8 +636,8 @@ public class SettingsActivity extends Activity {
     }
 
     /** 一行「标签＋分段钮」：标签占剩余宽，右侧是一排小钮，当前项朱砂填充 */
-    private void addSegRow(LinearLayout root, String label, String[] options,
-                           int selected, OnPick onPick) {
+    private TextView[] addSegRow(LinearLayout root, String label, String[] options,
+                                 int selected, OnPick onPick) {
         LinearLayout row = rowLine();
         TextView lab = rowLabel(label);
         lab.setLayoutParams(new LinearLayout.LayoutParams(
@@ -642,6 +664,7 @@ public class SettingsActivity extends Activity {
         }
         styleChips(chips, selected);
         root.addView(row);
+        return chips;
     }
 
     private void styleChips(TextView[] chips, int selected) {
