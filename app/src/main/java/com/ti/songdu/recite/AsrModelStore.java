@@ -14,22 +14,35 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * v1.16.0 识读模型仓：sherpa-onnx 流式 Zipformer（中文 14M，int8）四个文件，
- * 共约 25.4MB——不进 APK（APK 只涨 .so 的约 27MB），首次开启识读时按需下载到
- * files/asr-model/，口径同在线书库（下临时文件、验 md5、再改名）。
+ * 识读模型仓：基础版＝sherpa-onnx 流式 Zipformer（中文 14M，int8）四文件约
+ * 25.4MB；高级版＝SenseVoice 离线大模型两文件约 239.5MB。都不进 APK，首次
+ * 开启识读时按需下载到 files/asr-model/。
  *
- * v1.16.2 下载源改序：首选用户自己的 Gitee 私有仓 shixi-models——经 contents
- * API（与书库同一令牌机制）先取 model-manifest.json，再按清单下载：整文件
- * 逐件验 size＋md5；encoder 整件 21.6MB 超过 contents 通道单文件可传上限，
- * 仓内以 2MiB 分片存放，按 manifest 的 delivery 段逐片下载、逐片验 md5、
- * 按序拼合后验整件 size＋md5。Gitee 路线任一环节重试仍失败时，回退
- * HuggingFace 主源 huggingface.co／备源 hf-mirror.com 的整文件路线（原实现），
- * 保证识读在任何网络下仍可开通。仓内清单与内置校验值（FILES 的 size/md5）
- * 对不上即视为该路线失败，不用清单值覆盖内置校验。
+ * 下载源：用户 Gitee 私有仓 shixi-models（令牌同书库）——经 git trees API
+ * 拿 path→sha 索引，再经 git blobs API 按 sha 取 model-manifest.json 与各
+ * 文件：整文件逐件验 size＋md5；大文件仓内以 2MiB 分片存放，逐片下载、逐
+ * 片验 md5、按序拼合后验整件 size＋md5。清单值与内置校验值（FILES/
+ * SV_FILES）对不上即视为该路线失败，绝不用清单覆盖内置校验。基础版 Gitee
+ * 路线失败时回退 HuggingFace 整文件路线（v1.16.0 原兜底）。
+ * 通道为何不用 contents API：v1.20.1 诊断实测——contents 对个别 2MiB 分片
+ * 定点截断（part007 三次尝试都恰好少 187,678 字节，确定性失败、重试无用），
+ * 同一片经 git blob 完整通过。书库小文件不受影响、仍走 contents。
+ *
+ * v1.20.1 健壮性重做（真机 239MB 下载失败的教训）：
+ *  - 分片断点续传：已验过的分片落盘在 parts-<文件名>/ 里，失败/取消/重试都
+ *    复用，只补缺片；旧版每次尝试把拼合文件截断从第 0 片重来，任一片网络
+ *    抖动即整单作废，239MB 几乎下不完。
+ *  - 进度按所选集合的真实字节计：total＝待下文件总字节（已落盘分片先行计
+ *    入 done），done 随每块解码字节推进、单片重试时回退本次增量，不虚报。
+ *  - 活动下载状态对外发布（active＋StateListener），设置页状态行与下载对
+ *    话框都读同一份状态；支持取消（片粒度生效）。
  */
 public final class AsrModelStore {
 
@@ -60,14 +73,25 @@ public final class AsrModelStore {
         TOTAL_BYTES = t;
     }
 
-    /** 首选源：用户 Gitee 私有模型仓（contents API，令牌同书库） */
+    public static final ModelFile[] SV_FILES = {
+            new ModelFile("sensevoice-model.int8.onnx", 239233841L, "0e8e550411d3589be9f0af06f1c8fec3"),
+            new ModelFile("sensevoice-tokens.txt", 315894L, "17cdd9d527315e28553153706d23c719"),
+    };
+    public static final long SV_TOTAL_BYTES;
+
+    static {
+        long t2 = 0;
+        for (ModelFile f : SV_FILES) t2 += f.size;
+        SV_TOTAL_BYTES = t2;
+    }
+    public static final String SV_MODEL_NAME = SV_FILES[0].name;
+    public static final String SV_TOKENS_NAME = SV_FILES[1].name;
+
     private static final String MODELS_REPO = "shixi-models";
     private static final String MANIFEST_PATH = "model-manifest.json";
-    /** Gitee 路线单步尝试上限（清单/整文件/每一片）与重试间隔 */
     private static final int GITEE_ATTEMPTS = 3;
     private static final long[] GITEE_RETRY_DELAYS_MS = {2000, 5000};
 
-    /** 兜底源：HuggingFace（模型上游） */
     private static final String REPO =
             "csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23";
     private static final String[] BASES = {
@@ -76,13 +100,67 @@ public final class AsrModelStore {
     };
 
     public interface Callback {
-        /** done/total 为全模型合计字节 */
+        /** done/total 为所选集合的字节口径（已落盘分片计入 done） */
         void onProgress(long done, long total);
 
         void onDone();
 
         void onError(String message);
     }
+
+    // ---------- 活动下载状态（UI 订阅） ----------
+
+    public static final class DlState {
+        public volatile boolean running;
+        public volatile boolean wantBasic, wantSv;
+        public volatile long done, total;
+        public volatile boolean failed, cancelled;
+        public volatile String error;
+    }
+
+    public static volatile DlState active;
+    private static volatile boolean cancelRequested;
+
+    public interface StateListener {
+        void onState(DlState s);
+    }
+
+    private static final CopyOnWriteArrayList<StateListener> STATE_LISTENERS =
+            new CopyOnWriteArrayList<>();
+
+    public static void addStateListener(StateListener l) {
+        if (!STATE_LISTENERS.contains(l)) STATE_LISTENERS.add(l);
+        DlState s = active;
+        if (s != null) l.onState(s);
+    }
+
+    public static void removeStateListener(StateListener l) {
+        STATE_LISTENERS.remove(l);
+    }
+
+    private static void publishState() {
+        DlState s = active;
+        if (s == null) return;
+        for (StateListener l : STATE_LISTENERS) l.onState(s);
+    }
+
+    public static boolean isDownloading() {
+        DlState s = active;
+        return s != null && s.running;
+    }
+
+    public static void cancelActiveDownload() {
+        if (isDownloading()) cancelRequested = true;
+    }
+
+    private static final class Cancelled extends Exception {
+    }
+
+    private static void checkCancelled() throws Cancelled {
+        if (cancelRequested) throw new Cancelled();
+    }
+
+    // ---------- 就绪判定 ----------
 
     public static File dir(Context ctx) {
         return new File(ctx.getFilesDir(), "asr-model");
@@ -92,80 +170,96 @@ public final class AsrModelStore {
         return new File(dir(ctx), name);
     }
 
+    private static boolean fileReady(Context ctx, ModelFile f) {
+        File pf = file(ctx, f.name);
+        return pf.exists() && pf.length() == f.size;
+    }
+
     /** 就绪＝四文件都在且字节数对（md5 在下载完成时已验，启动只查大小） */
     public static boolean isReady(Context ctx) {
-        for (ModelFile f : FILES) {
-            File pf = file(ctx, f.name);
-            if (!pf.exists() || pf.length() != f.size) return false;
-        }
+        for (ModelFile f : FILES) if (!fileReady(ctx, f)) return false;
         return true;
     }
 
-    /** 缺失/不对的字节数（用于下载前估算与进度分母修正） */
-    public static long missingBytes(Context ctx) {
-        long done = 0;
-        for (ModelFile f : FILES) {
-            File pf = file(ctx, f.name);
-            if (pf.exists() && pf.length() == f.size) done += f.size;
-        }
-        return TOTAL_BYTES - done;
+    public static boolean isSenseVoiceReady(Context ctx) {
+        for (ModelFile f : SV_FILES) if (!fileReady(ctx, f)) return false;
+        return true;
     }
 
     public static long presentBytes(Context ctx) {
-        return TOTAL_BYTES - missingBytes(ctx);
+        long done = 0;
+        for (ModelFile f : FILES) if (fileReady(ctx, f)) done += f.size;
+        return done;
     }
 
-    /**
-     * 确保模型就绪（阻塞，请在后台线程调用）：先走 Gitee 模型仓路线；整条
-     * 路线失败（清单取不到/对不上、文件多次重试仍下不全）再回退 HF 路线。
-     * 两条路线都只补缺失文件、逐件验 size＋md5，已就绪的文件不重下。
-     */
-    public static void ensure(Context ctx, Callback cb) {
-        File d = dir(ctx);
-        //noinspection ResultOfMethodCallIgnored
-        d.mkdirs();
-        try {
-            ensureFromGitee(ctx, cb);
-        } catch (Exception ignored) {
-            // 落到下面的 HF 兜底；已由 Gitee 路线下好的文件按大小直接复用
+    public static long missingBytes(Context ctx) {
+        return TOTAL_BYTES - presentBytes(ctx);
+    }
+
+    public static long svMissingBytes(Context ctx) {
+        long done = 0;
+        for (ModelFile f : SV_FILES) if (fileReady(ctx, f)) done += f.size;
+        return SV_TOTAL_BYTES - done;
+    }
+
+    // ---------- 进度跟踪 ----------
+
+    private static final class Tracker {
+        final Callback cb;
+        final DlState state;
+        final long total;
+        long done;
+        long attemptDelta;
+
+        Tracker(long credited, long total, Callback cb, DlState state) {
+            this.done = credited;
+            this.total = total;
+            this.cb = cb;
+            this.state = state;
         }
-        if (isReady(ctx)) {
-            if (cb != null) cb.onDone();
-            return;
+
+        synchronized void addDelta(long d) {
+            done += d;
+            attemptDelta += d;
+            fire();
         }
-        try {
-            ensureFromHf(ctx, cb);
-            if (!isReady(ctx)) throw new IllegalStateException("模型文件不完整");
-            if (cb != null) cb.onDone();
-        } catch (Exception e) {
-            if (cb != null) cb.onError(e.getMessage() == null ? "下载失败" : e.getMessage());
+
+        synchronized void rollbackAttempt() {
+            done = Math.max(0, done - attemptDelta);
+            attemptDelta = 0;
+            fire();
+        }
+
+        synchronized void resetAttempt() {
+            attemptDelta = 0;
+        }
+
+        synchronized void complete() {
+            done = total;
+            fire();
+        }
+
+        void fire() {
+            long d, t;
+            synchronized (this) {
+                d = Math.min(done, total);
+                t = total;
+            }
+            if (state != null) {
+                state.done = d;
+                state.total = t;
+                publishState();
+            }
+            if (cb != null) cb.onProgress(d, t);
         }
     }
 
-    // ---------- 首选：Gitee 模型仓（manifest 驱动） ----------
-
-    private static void ensureFromGitee(Context ctx, Callback cb) throws Exception {
-        JSONObject manifest = fetchManifest(ctx);
-        // 清单 files 段按文件名建索引，并逐件与内置校验值核对——清单只是
-        // 取货单，校验仍以内置 FILES 为准，对不上即整条路线失败、走兜底。
-        Map<String, JSONObject> byName = new HashMap<>();
-        JSONArray files = manifest.getJSONArray("files");
-        for (int i = 0; i < files.length(); i++) {
-            JSONObject o = files.getJSONObject(i);
-            String path = o.getString("path");
-            byName.put(path.substring(path.lastIndexOf('/') + 1), o);
-        }
-        JSONObject delivery = manifest.optJSONObject("delivery");
-        final long[] progress = {presentBytes(ctx)};
-        final long[] attemptDelta = {0};
-        Bookstore.ProgressListener chunk = new Bookstore.ProgressListener() {
+    /** Bookstore 分片进度 → Tracker 增量 */
+    private static Bookstore.ProgressListener chunkTo(final Tracker tr) {
+        return new Bookstore.ProgressListener() {
             @Override
             public void onProgress(long d, long t) {
-                progress[0] += d;
-                attemptDelta[0] += d;
-                if (cb != null) {
-                    cb.onProgress(Math.min(progress[0], TOTAL_BYTES), TOTAL_BYTES);
-                }
+                tr.addDelta(d);
             }
 
             @Override
@@ -176,34 +270,398 @@ public final class AsrModelStore {
             public void onFileRetry(String path, int attempt, int maxAttempts, String reason) {
             }
         };
+    }
+
+    // ---------- 下载计划 ----------
+
+    private static final class FilePlan {
+        ModelFile f;
+        String repoPath;
+        String sha; // git blob sha（trees 索引）
+        Map<String, String> shaByPath; // 分片按 path 查 sha 用
+        JSONArray parts; // null＝整文件
+    }
+
+    /**
+     * 按选择集确保模型就绪（阻塞，请在后台线程调用）。已就绪文件不重下；
+     * 分片文件复用已落盘的合格分片续传。
+     */
+    public static void ensureSet(Context ctx, boolean wantBasic, boolean wantSv, Callback cb) {
+        DlState st = new DlState();
+        st.running = true;
+        st.wantBasic = wantBasic;
+        st.wantSv = wantSv;
+        active = st;
+        cancelRequested = false;
+        publishState();
+        try {
+            //noinspection ResultOfMethodCallIgnored
+            dir(ctx).mkdirs();
+            Map<String, String> shaByPath = null;
+            JSONObject manifest = null;
+            Exception manifestErr = null;
+            try {
+                shaByPath = fetchTreeMap(ctx);
+                manifest = fetchManifest(ctx, shaByPath);
+            } catch (Exception e) {
+                manifestErr = e;
+            }
+            List<FilePlan> basicPlanList = new ArrayList<>();
+            List<FilePlan> svPlanList = new ArrayList<>();
+            boolean basicViaHf = false;
+            if (wantBasic && !isReady(ctx)) {
+                if (manifest != null) {
+                    try {
+                        basicPlanList.addAll(basicPlans(ctx, manifest, shaByPath));
+                    } catch (Exception e) {
+                        basicPlanList.clear();
+                        basicViaHf = true;
+                    }
+                } else {
+                    basicViaHf = true;
+                }
+            }
+            if (wantSv && !isSenseVoiceReady(ctx)) {
+                if (manifest == null) {
+                    throw manifestErr != null ? manifestErr
+                            : new IllegalStateException("模型清单下载失败");
+                }
+                svPlanList.addAll(svPlans(ctx, manifest, shaByPath));
+            }
+            long total = 0, credited = 0;
+            for (FilePlan p : basicPlanList) {
+                total += p.f.size;
+                credited += creditedBytes(ctx, p);
+            }
+            for (FilePlan p : svPlanList) {
+                total += p.f.size;
+                credited += creditedBytes(ctx, p);
+            }
+            if (basicViaHf) {
+                for (ModelFile f : FILES) if (!fileReady(ctx, f)) total += f.size;
+            }
+            Tracker tr = new Tracker(credited, total, cb, st);
+            tr.fire();
+            if (basicViaHf) {
+                ensureBasicHf(ctx, tr);
+            } else {
+                try {
+                    for (FilePlan p : basicPlanList) executePlan(ctx, p, tr);
+                } catch (Cancelled c) {
+                    throw c;
+                } catch (Exception e) {
+                    // Gitee 路线中途失败：基础版未落盘文件改走 HF 兜底（只补
+                    // 缺失整文件；回退段进度可能短暂虚高，完成时由 complete 归位）
+                    ensureBasicHf(ctx, tr);
+                }
+            }
+            for (FilePlan p : svPlanList) executePlan(ctx, p, tr);
+            if (wantBasic && !isReady(ctx)) throw new IllegalStateException("基础版模型不完整");
+            if (wantSv && !isSenseVoiceReady(ctx)) throw new IllegalStateException("高级版模型不完整");
+            tr.complete();
+            st.running = false;
+            publishState();
+            if (cb != null) cb.onDone();
+        } catch (Cancelled c) {
+            st.running = false;
+            st.cancelled = true;
+            publishState();
+            if (cb != null) cb.onError("已取消");
+        } catch (Exception e) {
+            st.running = false;
+            st.failed = true;
+            st.error = e.getMessage() == null ? "下载失败" : e.getMessage();
+            publishState();
+            if (cb != null) cb.onError(st.error);
+        }
+    }
+
+    private static void executePlan(Context ctx, FilePlan p, Tracker tr) throws Exception {
+        checkCancelled();
+        if (p.parts != null) fetchSplit(ctx, p, tr);
+        else fetchWhole(ctx, p, tr);
+    }
+
+    /** 基础版计划：清单 files 按 basename 索引，逐件与内置校验核对 */
+    private static List<FilePlan> basicPlans(Context ctx, JSONObject manifest,
+                                             Map<String, String> shaByPath) throws Exception {
+        Map<String, JSONObject> byName = new HashMap<>();
+        JSONArray files = manifest.getJSONArray("files");
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject o = files.getJSONObject(i);
+            String path = o.getString("path");
+            byName.put(path.substring(path.lastIndexOf('/') + 1), o);
+        }
+        JSONObject delivery = manifest.optJSONObject("delivery");
+        List<FilePlan> out = new ArrayList<>();
         for (ModelFile f : FILES) {
-            File dest = file(ctx, f.name);
-            if (dest.exists() && dest.length() == f.size) continue;
+            if (fileReady(ctx, f)) continue;
             JSONObject fe = byName.get(f.name);
             if (fe == null || fe.getLong("size") != f.size
                     || !f.md5.equalsIgnoreCase(fe.optString("md5", ""))) {
                 throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
             }
+            FilePlan p = new FilePlan();
+            p.f = f;
+            p.repoPath = fe.getString("path");
+            p.sha = shaByPath.get(p.repoPath);
+            p.shaByPath = shaByPath;
+            if (p.sha == null) {
+                throw new IllegalStateException("仓内找不到文件：" + p.repoPath);
+            }
             JSONObject del = delivery == null ? null : delivery.optJSONObject(f.name);
             if (del != null && "split_parts_contents_api".equals(del.optString("method"))) {
-                fetchPartsAssemble(ctx, f, del, dest, progress, attemptDelta, chunk, cb);
+                long assembledSize = del.getLong("assembled_size");
+                String assembledMd5 = del.getString("assembled_md5");
+                if (assembledSize != f.size || !f.md5.equalsIgnoreCase(assembledMd5)) {
+                    throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
+                }
+                p.parts = del.getJSONArray("parts");
+            }
+            out.add(p);
+        }
+        return out;
+    }
+
+    /** 高级版计划：清单 sensevoice 键驱动，逐件与内置校验核对 */
+    private static List<FilePlan> svPlans(Context ctx, JSONObject manifest,
+                                          Map<String, String> shaByPath) throws Exception {
+        JSONObject sv = manifest.optJSONObject("sensevoice");
+        if (sv == null) throw new IllegalStateException("模型清单缺少高级版条目");
+        Map<String, JSONObject> byName = new HashMap<>();
+        JSONArray files = sv.getJSONArray("files");
+        for (int i = 0; i < files.length(); i++) {
+            JSONObject o = files.getJSONObject(i);
+            byName.put(o.getString("name"), o);
+        }
+        List<FilePlan> out = new ArrayList<>();
+        for (ModelFile f : SV_FILES) {
+            if (fileReady(ctx, f)) continue;
+            JSONObject fe = byName.get(f.name);
+            if (fe == null || fe.getLong("size") != f.size
+                    || !f.md5.equalsIgnoreCase(fe.optString("md5", ""))) {
+                throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
+            }
+            FilePlan p = new FilePlan();
+            p.f = f;
+            p.repoPath = fe.getString("repo_path");
+            p.sha = shaByPath.get(p.repoPath);
+            p.shaByPath = shaByPath;
+            if (p.sha == null) {
+                throw new IllegalStateException("仓内找不到文件：" + p.repoPath);
+            }
+            JSONObject del = fe.optJSONObject("delivery");
+            if (del != null && "split_parts_contents_api".equals(del.optString("method"))) {
+                p.parts = del.getJSONArray("parts");
+            }
+            out.add(p);
+        }
+        return out;
+    }
+
+    // ---------- 分片落盘与续传 ----------
+
+    private static File partsDir(Context ctx, ModelFile f) {
+        return new File(dir(ctx), "parts-" + f.name);
+    }
+
+    private static File partFile(Context ctx, ModelFile f, int idx) {
+        return new File(partsDir(ctx, f),
+                String.format(java.util.Locale.US, "part%03d", idx));
+    }
+
+    private static boolean partValid(File pf, long size, String md5) {
+        return pf.exists() && pf.length() == size
+                && (md5 == null || md5.equalsIgnoreCase(md5Of(pf)));
+    }
+
+    /** 已落盘合格分片的字节数（进度先行计入） */
+    private static long creditedBytes(Context ctx, FilePlan p) throws Exception {
+        if (p.parts == null) return 0;
+        long sum = 0;
+        for (int i = 0; i < p.parts.length(); i++) {
+            JSONObject part = p.parts.getJSONObject(i);
+            if (partValid(partFile(ctx, p.f, i), part.getLong("size"),
+                    part.optString("md5", null))) {
+                sum += part.getLong("size");
+            }
+        }
+        return sum;
+    }
+
+    private static void fetchWhole(Context ctx, FilePlan p, Tracker tr) throws Exception {
+        File tmp = new File(dir(ctx), p.f.name + ".dl");
+        fetchVerifiedBlob(p.sha, p.repoPath, tmp, p.f.size, p.f.md5, tr);
+        renameInto(tmp, file(ctx, p.f.name));
+    }
+
+    /**
+     * 分片文件：逐片取到 parts-<文件名>/partNNN 并逐片验 size＋md5（合格片
+     * 保留，失败/取消后重入时复用）；全片齐后按序拼合、验整件、改名、清分片。
+     */
+    private static void fetchSplit(Context ctx, FilePlan p, Tracker tr) throws Exception {
+        //noinspection ResultOfMethodCallIgnored
+        partsDir(ctx, p.f).mkdirs();
+        for (int i = 0; i < p.parts.length(); i++) {
+            checkCancelled();
+            JSONObject part = p.parts.getJSONObject(i);
+            long size = part.getLong("size");
+            String md5 = part.optString("md5", null);
+            File pf = partFile(ctx, p.f, i);
+            if (partValid(pf, size, md5)) continue;
+            String partPath = part.getString("path");
+            fetchVerifiedBlob(p.shaByPath.get(partPath), partPath, pf, size, md5, tr);
+        }
+        File assembly = new File(dir(ctx), p.f.name + ".part");
+        FileOutputStream out = new FileOutputStream(assembly, false);
+        try {
+            byte[] buf = new byte[65536];
+            for (int i = 0; i < p.parts.length(); i++) {
+                FileInputStream in = new FileInputStream(partFile(ctx, p.f, i));
+                int n;
+                while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+                in.close();
+            }
+        } finally {
+            out.close();
+        }
+        if (assembly.length() != p.f.size) {
+            //noinspection ResultOfMethodCallIgnored
+            assembly.delete();
+            throw new IllegalStateException("拼合大小不对：" + p.f.name);
+        }
+        if (!p.f.md5.equalsIgnoreCase(md5Of(assembly))) {
+            //noinspection ResultOfMethodCallIgnored
+            assembly.delete();
+            throw new IllegalStateException("拼合校验失败：" + p.f.name);
+        }
+        renameInto(assembly, file(ctx, p.f.name));
+        deleteRecursive(partsDir(ctx, p.f));
+    }
+
+    private static void deleteRecursive(File f) {
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) deleteRecursive(k);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        f.delete();
+    }
+
+    // ---------- Gitee git blob 取单个文件（验 size＋md5，失败重试） ----------
+
+    private static void fetchVerifiedBlob(String sha, String repoPath, File tmp, long size,
+                                          String md5, Tracker tr) throws Exception {
+        if (sha == null) {
+            throw new IllegalStateException("仓内找不到文件：" + repoPath);
+        }
+        Exception last = null;
+        for (int attempt = 1; attempt <= GITEE_ATTEMPTS; attempt++) {
+            checkCancelled();
+            if (attempt > 1) sleepGitee(GITEE_RETRY_DELAYS_MS[attempt - 2]);
+            tr.resetAttempt();
+            try {
+                MessageDigest md = MessageDigest.getInstance("MD5");
+                long written = Bookstore.downloadBlobFile(
+                        MODELS_REPO, sha, tmp, md, chunkTo(tr));
+                if (written != size) {
+                    throw new IllegalStateException(
+                            "大小不对：" + repoPath + " " + written + "/" + size);
+                }
+                if (md5 != null && !toHex(md.digest()).equalsIgnoreCase(md5)) {
+                    throw new IllegalStateException("校验失败：" + repoPath);
+                }
+                tr.resetAttempt();
+                return;
+            } catch (Cancelled c) {
+                tr.rollbackAttempt();
+                throw c;
+            } catch (Exception e) {
+                last = e;
+                tr.rollbackAttempt();
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
+        }
+        throw last != null ? last : new IllegalStateException("下载失败：" + repoPath);
+    }
+
+    /** git trees 索引：根树＋一层子树，建 path→blob sha 全表（小 JSON，带重试） */
+    private static Map<String, String> fetchTreeMap(Context ctx) throws Exception {
+        Exception last = null;
+        for (int attempt = 1; attempt <= GITEE_ATTEMPTS; attempt++) {
+            checkCancelled();
+            if (attempt > 1) sleepGitee(GITEE_RETRY_DELAYS_MS[attempt - 2]);
+            try {
+                Map<String, String> map = new HashMap<>();
+                JSONObject root = fetchTreeJson("master");
+                collectTree(root, "", map, true);
+                return map;
+            } catch (Cancelled c) {
+                throw c;
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        throw last != null ? last : new IllegalStateException("仓内文件索引获取失败");
+    }
+
+    private static void collectTree(JSONObject tree, String prefix,
+                                    Map<String, String> map, boolean top) throws Exception {
+        JSONArray arr = tree.getJSONArray("tree");
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject e = arr.getJSONObject(i);
+            String path = prefix + e.getString("path");
+            String type = e.optString("type", "blob");
+            if ("tree".equals(type)) {
+                if (top) collectTree(fetchTreeJson(e.getString("sha")), path + "/", map, false);
             } else {
-                File tmp = new File(dir(ctx), f.name + ".dl");
-                fetchVerifiedGitee(fe.getString("path"), tmp, f.size, f.md5,
-                        progress, attemptDelta, chunk, cb);
-                renameInto(tmp, dest);
+                map.put(path, e.getString("sha"));
             }
         }
     }
 
-    private static JSONObject fetchManifest(Context ctx) throws Exception {
+    private static JSONObject fetchTreeJson(String ref) throws Exception {
+        String token = com.ti.songdu.StoreConfig.TOKEN;
+        if (token == null || token.isEmpty()) throw new Exception("缺少书库令牌（构建时未注入）");
+        String url = com.ti.songdu.StoreConfig.API_BASE + "/repos/"
+                + com.ti.songdu.StoreConfig.OWNER + "/" + MODELS_REPO
+                + "/git/trees/" + ref
+                + "?access_token=" + java.net.URLEncoder.encode(token, "UTF-8");
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        c.setRequestProperty("User-Agent", "Shixi-Android");
+        try {
+            int code = c.getResponseCode();
+            if (code != 200) throw new IllegalStateException("文件索引获取失败（HTTP " + code + "）");
+            InputStream in = c.getInputStream();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) >= 0) bos.write(buf, 0, n);
+            in.close();
+            return new JSONObject(new String(bos.toByteArray(), "UTF-8"));
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    /** 清单改走 blob 通道（按 trees 索引的 sha 取，与分片同一条已验证通道） */
+    private static JSONObject fetchManifest(Context ctx, Map<String, String> shaByPath)
+            throws Exception {
+        String sha = shaByPath.get(MANIFEST_PATH);
+        if (sha == null) throw new IllegalStateException("仓内找不到模型清单");
         File tmp = new File(ctx.getCacheDir(), "asr_model_manifest.json");
         Exception last = null;
         for (int attempt = 1; attempt <= GITEE_ATTEMPTS; attempt++) {
+            checkCancelled();
             if (attempt > 1) sleepGitee(GITEE_RETRY_DELAYS_MS[attempt - 2]);
             try {
-                Bookstore.downloadContentsFile(MODELS_REPO, MANIFEST_PATH, tmp, null, null);
+                Bookstore.downloadBlobFile(MODELS_REPO, sha, tmp, null, null);
                 return new JSONObject(readTextFile(tmp));
+            } catch (Cancelled c) {
+                throw c;
             } catch (Exception e) {
                 last = e;
             } finally {
@@ -212,89 +670,6 @@ public final class AsrModelStore {
             }
         }
         throw last != null ? last : new IllegalStateException("模型清单下载失败");
-    }
-
-    /**
-     * encoder 的分片路线：逐片下载到临时文件、逐片验 size＋md5 后顺序追加进
-     * 拼合文件；全片齐后验整件 size＋md5，再改名为正式文件。分片临时文件与
-     * 拼合半成品在成功后不残留。
-     */
-    private static void fetchPartsAssemble(Context ctx, ModelFile f, JSONObject del,
-                                           File dest, long[] progress, long[] attemptDelta,
-                                           Bookstore.ProgressListener chunk, Callback cb)
-            throws Exception {
-        long assembledSize = del.getLong("assembled_size");
-        String assembledMd5 = del.getString("assembled_md5");
-        if (assembledSize != f.size || !f.md5.equalsIgnoreCase(assembledMd5)) {
-            throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
-        }
-        JSONArray parts = del.getJSONArray("parts");
-        File assembly = new File(dir(ctx), f.name + ".part");
-        File seg = new File(dir(ctx), f.name + ".seg");
-        FileOutputStream out = new FileOutputStream(assembly, false);
-        try {
-            byte[] buf = new byte[65536];
-            for (int i = 0; i < parts.length(); i++) {
-                JSONObject p = parts.getJSONObject(i);
-                fetchVerifiedGitee(p.getString("path"), seg, p.getLong("size"),
-                        p.optString("md5", null), progress, attemptDelta, chunk, cb);
-                FileInputStream in = new FileInputStream(seg);
-                int n;
-                while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
-                in.close();
-                //noinspection ResultOfMethodCallIgnored
-                seg.delete();
-            }
-        } finally {
-            out.close();
-        }
-        if (assembly.length() != assembledSize) {
-            //noinspection ResultOfMethodCallIgnored
-            assembly.delete();
-            throw new IllegalStateException("拼合大小不对：" + f.name);
-        }
-        if (!assembledMd5.equalsIgnoreCase(md5Of(assembly))) {
-            //noinspection ResultOfMethodCallIgnored
-            assembly.delete();
-            throw new IllegalStateException("拼合校验失败：" + f.name);
-        }
-        renameInto(assembly, dest);
-    }
-
-    /**
-     * 经 contents API 取仓内一个文件到 tmp，边下边验 size＋md5；失败重试
-     * （间隔递增），重试前把本次已上报的进度回退，避免重复计数。
-     */
-    private static void fetchVerifiedGitee(String repoPath, File tmp, long size, String md5,
-                                           long[] progress, long[] attemptDelta,
-                                           Bookstore.ProgressListener chunk, Callback cb)
-            throws Exception {
-        Exception last = null;
-        for (int attempt = 1; attempt <= GITEE_ATTEMPTS; attempt++) {
-            if (attempt > 1) sleepGitee(GITEE_RETRY_DELAYS_MS[attempt - 2]);
-            attemptDelta[0] = 0;
-            try {
-                MessageDigest md = MessageDigest.getInstance("MD5");
-                long written = Bookstore.downloadContentsFile(MODELS_REPO, repoPath, tmp, md, chunk);
-                if (written != size) {
-                    throw new IllegalStateException(
-                            "大小不对：" + repoPath + " " + written + "/" + size);
-                }
-                if (md5 != null && !toHex(md.digest()).equalsIgnoreCase(md5)) {
-                    throw new IllegalStateException("校验失败：" + repoPath);
-                }
-                return;
-            } catch (Exception e) {
-                last = e;
-                progress[0] = Math.max(0, progress[0] - attemptDelta[0]);
-                if (cb != null) {
-                    cb.onProgress(Math.min(progress[0], TOTAL_BYTES), TOTAL_BYTES);
-                }
-                //noinspection ResultOfMethodCallIgnored
-                tmp.delete();
-            }
-        }
-        throw last != null ? last : new IllegalStateException("下载失败：" + repoPath);
     }
 
     private static void renameInto(File tmp, File dest) throws Exception {
@@ -329,37 +704,41 @@ public final class AsrModelStore {
         }
     }
 
-    // ---------- 兜底：HuggingFace 整文件路线（v1.16.0 原实现） ----------
+    // ---------- 兜底：HuggingFace 整文件路线（基础版 Gitee 路线失败时） ----------
 
-    private static void ensureFromHf(Context ctx, Callback cb) throws Exception {
-        long doneBase = presentBytes(ctx);
+    private static void ensureBasicHf(Context ctx, Tracker tr) throws Exception {
         for (ModelFile f : FILES) {
-            File pf = file(ctx, f.name);
-            if (pf.exists() && pf.length() == f.size) continue;
-            downloadOne(f, pf, doneBase, cb);
-            doneBase += f.size;
+            if (fileReady(ctx, f)) continue;
+            checkCancelled();
+            downloadOneHf(ctx, f, tr);
         }
     }
 
-    private static void downloadOne(ModelFile f, File dest, long doneBase, Callback cb)
-            throws Exception {
+    private static void downloadOneHf(Context ctx, ModelFile f, Tracker tr) throws Exception {
         Exception last = null;
         for (String base : BASES) {
+            checkCancelled();
+            tr.resetAttempt();
             try {
-                downloadFrom(base + f.name, f, dest, doneBase, cb);
+                downloadFromHf(base + f.name, ctx, f, tr);
                 return;
+            } catch (Cancelled c) {
+                tr.rollbackAttempt();
+                throw c;
             } catch (Exception e) {
                 last = e;
+                tr.rollbackAttempt();
                 //noinspection ResultOfMethodCallIgnored
-                new File(dest.getParentFile(), f.name + ".part").delete();
+                new File(dir(ctx), f.name + ".part").delete();
             }
         }
         throw last != null ? last : new IllegalStateException("下载失败：" + f.name);
     }
 
-    private static void downloadFrom(String urlStr, ModelFile f, File dest,
-                                     long doneBase, Callback cb) throws Exception {
-        File part = new File(dest.getParentFile(), f.name + ".part");
+    private static void downloadFromHf(String urlStr, Context ctx, ModelFile f, Tracker tr)
+            throws Exception {
+        File dest = file(ctx, f.name);
+        File part = new File(dir(ctx), f.name + ".part");
         HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
         conn.setConnectTimeout(15000);
         conn.setReadTimeout(30000);
@@ -377,15 +756,14 @@ public final class AsrModelStore {
                 out.write(buf, 0, n);
                 md.update(buf, 0, n);
                 got += n;
-                if (cb != null) cb.onProgress(doneBase + got, TOTAL_BYTES);
+                tr.addDelta(n);
             }
             out.close();
             in.close();
             if (got != f.size) {
                 throw new IllegalStateException("大小不对：" + f.name + " " + got + "/" + f.size);
             }
-            String hex = toHex(md.digest());
-            if (!hex.equals(f.md5)) {
+            if (!toHex(md.digest()).equals(f.md5)) {
                 throw new IllegalStateException("校验失败：" + f.name);
             }
             if (dest.exists()) {
@@ -409,7 +787,6 @@ public final class AsrModelStore {
         return sb.toString();
     }
 
-    /** md5 工具（fetch 校验/调试用） */
     public static String md5Of(File f) {
         try {
             MessageDigest md = MessageDigest.getInstance("MD5");
@@ -422,160 +799,5 @@ public final class AsrModelStore {
         } catch (Exception e) {
             return "";
         }
-    }
-
-    // ---------- v1.18.0 高级版 AI（离线大模型，清单 sensevoice 键驱动） ----------
-
-    public static final ModelFile[] SV_FILES = {
-            new ModelFile("sensevoice-model.int8.onnx", 239233841L, "0e8e550411d3589be9f0af06f1c8fec3"),
-            new ModelFile("sensevoice-tokens.txt", 315894L, "17cdd9d527315e28553153706d23c719"),
-    };
-    public static final long SV_TOTAL_BYTES;
-    static {
-        long t2 = 0;
-        for (ModelFile f : SV_FILES) t2 += f.size;
-        SV_TOTAL_BYTES = t2;
-    }
-    public static final String SV_MODEL_NAME = SV_FILES[0].name;
-    public static final String SV_TOKENS_NAME = SV_FILES[1].name;
-
-    public static boolean isSenseVoiceReady(Context ctx) {
-        for (ModelFile f : SV_FILES) {
-            File pf = file(ctx, f.name);
-            if (!pf.exists() || pf.length() != f.size) return false;
-        }
-        return true;
-    }
-
-    public static long svMissingBytes(Context ctx) {
-        long done = 0;
-        for (ModelFile f : SV_FILES) {
-            File pf = file(ctx, f.name);
-            if (pf.exists() && pf.length() == f.size) done += f.size;
-        }
-        return SV_TOTAL_BYTES - done;
-    }
-
-    /**
-     * 按选择集确保模型就绪（阻塞，后台线程调用）：wantBasic 走既有基础版路线
-     * （Gitee 清单＋HF 兜底）；wantSv 只走 Gitee 清单 sensevoice 键路线
-     * （清单值与内置 size/md5 对不上即失败，不用清单覆盖内置校验）。
-     * 进度按所选集合总字节合并上报；已就绪文件不重下。
-     */
-    public static void ensureSet(Context ctx, boolean wantBasic, boolean wantSv, Callback cb) {
-        long total = (wantBasic ? TOTAL_BYTES : 0) + (wantSv ? SV_TOTAL_BYTES : 0);
-        long baseDone = (wantBasic ? presentBytes(ctx) : 0)
-                + (wantSv ? (SV_TOTAL_BYTES - svMissingBytes(ctx)) : 0);
-        final long[] doneBox = {baseDone};
-        Callback wrap = cb == null ? null : new Callback() {
-            @Override public void onProgress(long d, long tt) {
-                // 子路线按各自总量上报，这里统一折算为所选集合进度
-                cb.onProgress(Math.min(total, doneBox[0]), total);
-            }
-            @Override public void onDone() {}
-            @Override public void onError(String m) {}
-        };
-        try {
-            if (wantBasic && !isReady(ctx)) {
-                final long before = presentBytes(ctx);
-                ensure(ctx, new Callback() {
-                    @Override public void onProgress(long d, long tt) {
-                        doneBox[0] = (wantSv ? (SV_TOTAL_BYTES - svMissingBytes(ctx)) : 0) + d;
-                        if (cb != null) cb.onProgress(Math.min(doneBox[0], total), total);
-                    }
-                    @Override public void onDone() {}
-                    @Override public void onError(String m) {}
-                });
-                if (!isReady(ctx)) throw new IllegalStateException("基础版模型不完整");
-                doneBox[0] = (wantSv ? (SV_TOTAL_BYTES - svMissingBytes(ctx)) : 0) + TOTAL_BYTES;
-            }
-            if (wantSv && !isSenseVoiceReady(ctx)) {
-                ensureSenseVoice(ctx, doneBox, total, cb);
-                if (!isSenseVoiceReady(ctx)) throw new IllegalStateException("高级版模型不完整");
-            }
-            if (cb != null) { cb.onProgress(total, total); cb.onDone(); }
-        } catch (Exception e) {
-            if (cb != null) cb.onError(e.getMessage() == null ? "下载失败" : e.getMessage());
-        }
-    }
-
-    private static void ensureSenseVoice(Context ctx, long[] doneBox, long total, Callback cb)
-            throws Exception {
-        JSONObject manifest = fetchManifest(ctx);
-        JSONObject sv = manifest.optJSONObject("sensevoice");
-        if (sv == null) throw new IllegalStateException("模型清单缺少高级版条目");
-        JSONArray files = sv.getJSONArray("files");
-        Map<String, JSONObject> byName = new HashMap<>();
-        for (int i = 0; i < files.length(); i++) {
-            JSONObject o = files.getJSONObject(i);
-            byName.put(o.getString("name"), o);
-        }
-        final long[] progress = {SV_TOTAL_BYTES - svMissingBytes(ctx)};
-        final long[] attemptDelta = {0};
-        Bookstore.ProgressListener chunk = new Bookstore.ProgressListener() {
-            @Override public void onProgress(long d, long tt) {
-                progress[0] += d;
-                attemptDelta[0] += d;
-                doneBox[0] = (TOTAL_BYTES >= 0 ? Math.max(0, doneBox[0]) : 0);
-                if (cb != null) cb.onProgress(Math.min(total, (total - SV_TOTAL_BYTES) + Math.min(progress[0], SV_TOTAL_BYTES)), total);
-            }
-            @Override public void onDone(boolean ok, String error) {}
-            @Override public void onFileRetry(String path, int attempt, int maxAttempts, String reason) {}
-        };
-        for (ModelFile f : SV_FILES) {
-            File dest = file(ctx, f.name);
-            if (dest.exists() && dest.length() == f.size) continue;
-            JSONObject fe = byName.get(f.name);
-            if (fe == null || fe.getLong("size") != f.size
-                    || !f.md5.equalsIgnoreCase(fe.optString("md5", ""))) {
-                throw new IllegalStateException("模型清单与内置校验值不一致：" + f.name);
-            }
-            String repoPath = fe.getString("repo_path");
-            JSONObject del = fe.optJSONObject("delivery");
-            if (del != null && "split_parts_contents_api".equals(del.optString("method"))) {
-                fetchPartsAssembleSv(ctx, f, del, dest, progress, attemptDelta, chunk);
-            } else {
-                File tmp = new File(dir(ctx), f.name + ".dl");
-                fetchVerifiedGitee(repoPath, tmp, f.size, f.md5, progress, attemptDelta, chunk, null);
-                renameInto(tmp, dest);
-            }
-        }
-    }
-
-    /** 高级版分片拼合：parts 在该文件自己的 delivery 段里（清单格式 v1.18.0 定版） */
-    private static void fetchPartsAssembleSv(Context ctx, ModelFile f, JSONObject del,
-                                             File dest, long[] progress, long[] attemptDelta,
-                                             Bookstore.ProgressListener chunk) throws Exception {
-        JSONArray parts = del.getJSONArray("parts");
-        File assembly = new File(dir(ctx), f.name + ".part");
-        File seg = new File(dir(ctx), f.name + ".seg");
-        FileOutputStream out = new FileOutputStream(assembly, false);
-        try {
-            byte[] buf = new byte[65536];
-            for (int i = 0; i < parts.length(); i++) {
-                JSONObject part = parts.getJSONObject(i);
-                fetchVerifiedGitee(part.getString("path"), seg, part.getLong("size"),
-                        part.optString("md5", null), progress, attemptDelta, chunk, null);
-                FileInputStream in = new FileInputStream(seg);
-                int n;
-                while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
-                in.close();
-                //noinspection ResultOfMethodCallIgnored
-                seg.delete();
-            }
-        } finally {
-            out.close();
-        }
-        if (assembly.length() != f.size) {
-            //noinspection ResultOfMethodCallIgnored
-            assembly.delete();
-            throw new IllegalStateException("拼合大小不对：" + f.name);
-        }
-        if (!f.md5.equalsIgnoreCase(md5Of(assembly))) {
-            //noinspection ResultOfMethodCallIgnored
-            assembly.delete();
-            throw new IllegalStateException("拼合校验失败：" + f.name);
-        }
-        renameInto(assembly, dest);
     }
 }

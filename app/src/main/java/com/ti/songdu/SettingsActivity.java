@@ -416,13 +416,41 @@ public class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshPermRow(); // 可能刚从系统授权页回来
-        // 识读模型可能刚下载完，状态行在 onCreate 已建时靠引用刷新不便，此处不重建
         refreshVoiceRow(); // 可能刚在选声页改过声音
+        // v1.20.1：识读模型下载中回到设置页，状态行继续转进度
+        enginePollHandler.removeCallbacks(enginePoll);
+        enginePoll.run();
     }
 
-    /** v1.18.0 识读模型状态行：当前引擎已下载／去下载 */
+    @Override
+    protected void onPause() {
+        enginePollHandler.removeCallbacks(enginePoll);
+        super.onPause();
+    }
+
+    /** v1.18.0 识读模型状态行：当前引擎已下载／去下载
+     *  v1.20.1：有下载在跑时同步显示进度（与下载对话框同一份状态） */
+    private TextView engineStateView;
+    private final android.os.Handler enginePollHandler = new android.os.Handler();
+    private final Runnable enginePoll = new Runnable() {
+        @Override
+        public void run() {
+            refreshEngineState(engineStateView);
+            if (AsrModelStore.isDownloading()) {
+                enginePollHandler.postDelayed(this, 700);
+            }
+        }
+    };
+
     private void refreshEngineState(TextView tv) {
         if (tv == null) return;
+        engineStateView = tv;
+        if (AsrModelStore.isDownloading()) {
+            AsrModelStore.DlState s = AsrModelStore.active;
+            int pct = s != null && s.total > 0 ? (int) (s.done * 100 / s.total) : 0;
+            tv.setText("下载中 · " + pct + "% ›");
+            return;
+        }
         boolean adv = RecitePrefs.isAdvanced(this);
         boolean ready = adv ? AsrModelStore.isSenseVoiceReady(this)
                 : AsrModelStore.isReady(this);

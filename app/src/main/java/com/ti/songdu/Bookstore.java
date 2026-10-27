@@ -576,11 +576,38 @@ public final class Bookstore {
         // 且失败即整本作废，用户看到的就是「下到一半停住不动」。
         c.setReadTimeout(30000);
         c.setRequestProperty("User-Agent", "Shixi-Android");
+        return streamBase64Content(c, path, dest, md, chunkPl);
+    }
+
+    /**
+     * 经 Gitee git blobs API 按 sha 取一个文件：响应 JSON 的 content 同样是
+     * base64，解码逻辑与 contents 路线共用。
+     * v1.20.1 新增，专供识读模型下载：contents 路线实测会对个别 2MiB 分片
+     * 定点截断（如 part007 三次都少 187,678 字节、重试永假），blob 路线同片
+     * 完整通过——模型这种上百分片的大文件改走 blob，书库小文件仍走 contents。
+     */
+    public static long downloadBlobFile(String repo, String sha, File dest,
+                                        MessageDigest md, ProgressListener chunkPl) throws Exception {
+        String token = StoreConfig.TOKEN;
+        if (token == null || token.isEmpty()) throw new Exception("缺少书库令牌（构建时未注入）");
+        String url = StoreConfig.API_BASE + "/repos/" + StoreConfig.OWNER + "/" + repo
+                + "/git/blobs/" + sha
+                + "?access_token=" + URLEncoder.encode(token, "UTF-8");
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        c.setRequestProperty("User-Agent", "Shixi-Android");
+        return streamBase64Content(c, "blob " + sha, dest, md, chunkPl);
+    }
+
+    /** contents/blob 两路共用的响应流式 base64 解码写盘（原 downloadContentsFile 主体） */
+    private static long streamBase64Content(HttpURLConnection c, String label, File dest,
+                                            MessageDigest md, ProgressListener chunkPl) throws Exception {
         int code = c.getResponseCode();
         if (code != 200) {
             String err = readText(c.getErrorStream());
             c.disconnect();
-            throw new Exception("下载 " + path + " 失败（HTTP " + code + "）"
+            throw new Exception("下载 " + label + " 失败（HTTP " + code + "）"
                     + (err != null && !err.isEmpty() ? "：" + trimMsg(err) : ""));
         }
         InputStream in = c.getInputStream();
@@ -589,13 +616,13 @@ public final class Bookstore {
         try {
             ByteReader br = new ByteReader(in);
             // 阶段 0：找到 "content" 键；阶段 1：跳到值的起始引号后
-            if (!seekContentValue(br)) throw new Exception("响应里没有 content 字段（" + path + "）");
+            if (!seekContentValue(br)) throw new Exception("响应里没有 content 字段（" + label + "）");
             byte[] acc = new byte[70000];
             int accLen = 0;
             boolean end = false;
             while (!end) {
                 int ch = br.read();
-                if (ch < 0) throw new Exception("响应中途断开（" + path + "）");
+                if (ch < 0) throw new Exception("响应中途断开（" + label + "）");
                 if (ch == '\\') { // JSON 转义（如 \n）：两字节都跳过
                     br.read();
                     continue;
