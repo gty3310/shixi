@@ -43,8 +43,10 @@ import com.ti.songdu.recite.ReciteStatsV2;
  *  - 每 150ms 轮询位置、对有时间的句子二分查找当前句 → JS 高亮＋翻页式跟随
  *    （v1.4.2：当前句在可视区内不滚动，超出才整页翻到页首，实现在 reader.html 的
  *    pageToSentence；不再用居中跟随）；
- *    用户手动滚动（touchmove/wheel）后暂停跟随，6 秒后自动恢复或点顶栏「⇓ 跟随」立即恢复
- *    （恢复时同样按翻页式定位）；
+ *    跟随规则 v1.19.0（用户定稿，状态机在 FollowGate）：进入跟随只有两路——
+ *    点顶栏「⇓ 跟随」钮、或播放器由暂停变为播放；退出只有手滑动一路，脱离后
+ *    绝不自动恢复；暂停且不跟随时绝不自动跳转。（旧口径「手动滚动后暂停跟随、
+ *    6 秒后自动恢复」只保留给跟读模式，普通播放不再适用。）
  *  - 轻点正文非句子区域 → 沉浸模式（隐藏顶栏与播放栏），再点任意处恢复；
  *  - 纯读计数：全文末尾有「已读到末尾 · 点此记一遍」按钮（在文档最末端，必须真正
  *    滚到结尾才点得到，防误触），点击才走 Store.increment 给今日 +1，与听读共用一本账，
@@ -127,8 +129,17 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     /** v1.8.2 小句高亮：当前句内小句序号（与 JS wantClause 同步）与跟读模式推送去重 */
     private int curClause = -1;
     private Boolean followModePushed = null;
+    /** 跟读模式的手动滚动闩锁（旧口径：暂停跟随 6 秒后自动恢复）——v1.19.0 起
+     *  只服务于跟读模式；普通播放改走下面的 FollowGate 状态机 */
     private boolean followPaused = false;
     private long followResumeAt = 0;
+    /** v1.19.0 阅读跟随状态机（普通播放）：进跟随只有点「跟随」钮／暂停变播放
+     *  两路，退出只有手滑一路；初始不跟随，进阅读页不自动进入 */
+    private final FollowGate followGate = new FollowGate();
+    /** 上一轮轮询时「本曲目正在播放」的状态，用于捕捉暂停→播放边沿 */
+    private boolean prevPlayingMine = false;
+    private boolean followBtnShown = false;
+    private Boolean followGatePushed = null;
     private boolean finishDialogShowing = false;
     private String lastToggleLabel = null;
     private String lastSpeedLabel = null;
@@ -220,6 +231,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 if (curSentence >= 0) {
                     web.evaluateJavascript("setCur(" + curSentence + ",false)", null);
                 }
+                // v1.19.0：页面（重）加载后把跟随态补推给 JS（竖排重分页锚点要用）
+                followGatePushed = followGate.isFollowing();
+                web.evaluateJavascript("setFollowGate(" + followGate.isFollowing() + ")", null);
                 // v1.16.0：注入本书的句子标记（render 分批完成时 JS 会再重放一次）
                 pushMarksToWeb();
                 // v1.16.0 复习页跳转：目标句可能在分批渲染的后段，等它出现再定位
@@ -232,7 +246,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         web.loadDataWithBaseURL(null, buildHtml(), "text/html", "UTF-8", null);
 
         findViewById(R.id.btnReaderBack).setOnClickListener(v -> finish());
-        btnFollow.setOnClickListener(v -> resumeFollow(true));
+        btnFollow.setOnClickListener(v -> onFollowButtonTap());
         btnRToggle.setOnClickListener(v -> onToggleThisTrack());
         findViewById(R.id.btnRBack15).setOnClickListener(v -> sendSeekRel(-15000));
         findViewById(R.id.btnRFwd15).setOnClickListener(v -> sendSeekRel(15000));
@@ -777,6 +791,26 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             lastGapOn = gapOn;
             web.evaluateJavascript("setGap(" + gapOn + ")", null);
         }
+        // v1.19.0 阅读跟随状态机（普通播放；跟读仍走旧闩锁、识读不经此处）：
+        // 暂停→播放边沿是「进入跟随」的第二条路（第一条是点「跟随」钮，在
+        // onFollowButtonTap）；切句/进页/恢复都不许自动进入。跟随态同步推给
+        // JS，竖排重分页按它选锚点。「跟随」钮显隐也在这里统一管：普通模式下
+        // 不跟随且本曲目有当前句时显示（暂停时点它＝跳到暂停句）。
+        if (!reciteOn) {
+            boolean nowPlayingMine = mine && svc.playing;
+            if (!fOn && nowPlayingMine && !prevPlayingMine) {
+                followGate.onPlayStarted();
+                if (curSentence >= 0) {
+                    web.evaluateJavascript("setCur(" + curSentence + ",true)", null);
+                }
+            }
+            prevPlayingMine = nowPlayingMine;
+            if (followGatePushed == null || followGatePushed != followGate.isFollowing()) {
+                followGatePushed = followGate.isFollowing();
+                web.evaluateJavascript("setFollowGate(" + followGate.isFollowing() + ")", null);
+            }
+            updateFollowButtonVisibility(mine, fOn);
+        }
         // v1.16.0 识读中：当前句由识读会话驱动，播放轮询不再抢高亮
         if (reciteOn) {
             refreshNoteBar();
@@ -794,9 +828,10 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         if (flatIdx != curSentence) {
             curSentence = flatIdx;
             sentChanged = true;
-            boolean scroll = !followPaused;
+            // v1.19.0：普通播放滚不滚只看跟随状态机；跟读模式沿用旧闩锁口径
+            boolean scroll = fOn ? !followPaused : followGate.isFollowing();
             web.evaluateJavascript("setCur(" + flatIdx + "," + scroll + ")", null);
-        } else if (followPaused && System.currentTimeMillis() >= followResumeAt) {
+        } else if (fOn && followPaused && System.currentTimeMillis() >= followResumeAt) {
             resumeFollow(true);
         }
         // v1.8.2 小句高亮：仅普通播放——按 breaks（缩放后时间轴，与 tStart 同口径）
@@ -842,9 +877,44 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     private void resumeFollow(boolean scrollToCur) {
         followPaused = false;
+        followBtnShown = false;
         btnFollow.setVisibility(View.GONE);
         if (scrollToCur && curSentence >= 0) {
             web.evaluateJavascript("setCur(" + curSentence + ",true)", null);
+        }
+    }
+
+    /** 「跟随」钮点击＝进入跟随的第一条路（v1.19.0）：普通模式走状态机并立即
+     *  跳到当前句（暂停时即暂停句）；跟读模式沿用旧口径（清闩锁＋跳回当前句） */
+    private void onFollowButtonTap() {
+        PlayerService svc = PlayerService.instance;
+        boolean fOn = svc != null ? svc.followEnabled
+                : getSharedPreferences("follow_prefs", MODE_PRIVATE).getBoolean("enabled", false);
+        if (fOn) {
+            resumeFollow(true);
+            return;
+        }
+        followGate.onFollowButtonTap();
+        followBtnShown = false;
+        btnFollow.setVisibility(View.GONE);
+        if (followGatePushed == null || !followGatePushed) {
+            followGatePushed = true;
+            web.evaluateJavascript("setFollowGate(true)", null);
+        }
+        if (curSentence >= 0) {
+            web.evaluateJavascript("setCur(" + curSentence + ",true)", null);
+        }
+    }
+
+    /** 「跟随」钮显隐统一出口（轮询驱动）：普通模式＝不跟随、本曲目在服务里、
+     *  且已有当前句时显示；跟读模式＝旧闩锁暂停跟随时显示（与旧版一致） */
+    private void updateFollowButtonVisibility(boolean mine, boolean followReadMode) {
+        boolean want = followReadMode
+                ? followPaused
+                : (!followGate.isFollowing() && mine && curSentence >= 0);
+        if (want != followBtnShown) {
+            followBtnShown = want;
+            btnFollow.setVisibility(want ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -978,6 +1048,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             if (svc.followEnabled) svc.setFollowEnabled(false);
             if (svc.playing) svc.pause();
         }
+        // 识读接管高亮期间「跟随」钮不掺和（轮询在识读中不刷新它的显隐）
+        followBtnShown = false;
+        btnFollow.setVisibility(View.GONE);
         if (reciteSession == null) {
             reciteSession = new ReciteSession(this, buildReciteData(),
                     ReciteStatsV2.get(this), new ReciteSession.Listener() {
@@ -1169,12 +1242,22 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         public void userScrolled() {
             runOnUiThread(() -> {
                 PlayerService svc = PlayerService.instance;
-                if (svc != null && svc.current != null && svc.current.id.equals(track.id)
-                        && !followPaused) {
-                    followPaused = true;
-                    followResumeAt = System.currentTimeMillis() + 6000;
-                    btnFollow.setVisibility(View.VISIBLE);
+                // 跟读模式：沿用旧闩锁口径（暂停跟随 6 秒后自动恢复），本版不改
+                if (svc != null && svc.followEnabled) {
+                    if (svc.current != null && svc.current.id.equals(track.id)
+                            && !followPaused) {
+                        followPaused = true;
+                        followResumeAt = System.currentTimeMillis() + 6000;
+                        followBtnShown = true;
+                        btnFollow.setVisibility(View.VISIBLE);
+                    }
+                    return;
                 }
+                // 识读自己驱动高亮，不经跟随状态机
+                if (reciteOn) return;
+                // v1.19.0：手滑动是退出跟随的唯一一路（暂停、播放皆然）；
+                // 「跟随」钮的重新出现由轮询的显隐统一出口负责
+                followGate.onUserSwipe();
             });
         }
 
@@ -1240,6 +1323,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     protected void onResume() {
         super.onResume();
         PlayerService.listener = this;
+        // v1.19.0：边沿基线按当前实际状态起算——进阅读页本身不是进入跟随的
+        // 路径，本来就在播的书不得被误判成「由暂停变为播放」
+        PlayerService svc0 = PlayerService.instance;
+        prevPlayingMine = svc0 != null && svc0.current != null
+                && svc0.current.id.equals(track.id) && svc0.playing;
         applyLoop();
         applyButtonVisibility(); // 设置页可能刚改过显隐，回来即生效
         refreshBookForVoice();

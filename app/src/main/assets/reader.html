@@ -402,7 +402,12 @@ function vertFollow(el){
   var p = pageOfSentence(el);
   if (p !== pgCur) goPage(p, true);
 }
-/* 布局变化（字号/注音/繁简重渲/旋转）后重新分页，并回到当前句所在页（无当前句则保持页号、越界钳制） */
+/* 跟随态（v1.19.0）：原生侧 FollowGate 推送。竖排重分页的锚点按它决定：
+   跟随中 → 回到当前句所在页；不跟随时 → 留在用户正看的页（钳制越界），
+   绝不借布局变化之名把视图拽到播放句去 */
+var followGateOn = false;
+function setFollowGate(on){ followGateOn = !!on; }
+/* 布局变化（字号/注音/繁简重渲/旋转）后重新分页 */
 function repaginate(){
   if (!isVert()){ reportPage(); return; }
   vertMeasure();
@@ -410,7 +415,7 @@ function repaginate(){
     if (!isVert() || !ok) return;
     vertMeasure();
     var target = pgCur;
-    if (cur >= 0){
+    if (followGateOn && cur >= 0){
       var el = document.getElementById('si' + cur);
       if (el) target = pageOfSentence(el);
     }
@@ -700,10 +705,24 @@ document.addEventListener('click', function(e){
   immersive = true;
   Bridge.setImmersive(true);
 });
-/* 横排：用户手动滚动后暂停跟随。竖排页面静止、无自由滚动，手动翻页已由
-   flipPage 自己上报 userScrolled，touchmove/wheel 不再重复上报（免得随手一碰
-   就把跟随闩锁 6 秒、且跟随恢复又只能靠已修复的 vertFollow 落页） */
-document.addEventListener('touchmove', function(){ if (!isVert()) Bridge.userScrolled(); }, {passive:true});
+/* 横排：用户手动滑动 → 退出跟随（v1.19.0 跟随状态机在原生侧）。
+   可靠区分「人滑」与「程序滚」：touchmove/wheel 只有真人手势能产生，程序滚动
+   （scrollIntoView/scrollTo）不触发这两个事件，天然不会误报；再加 12px 位移
+   阈值——点按的轻微抖动、点句 seek 的触摸不算滑动，一次触摸只上报一次。
+   竖排页面静止、无自由滚动，手动翻页已由 flipPage 自己上报 userScrolled，
+   这里不再重复上报。 */
+var hStartX = 0, hStartY = 0, hSwipeReported = false;
+document.addEventListener('touchstart', function(e){
+  if (e.touches.length === 1){
+    hStartX = e.touches[0].clientX; hStartY = e.touches[0].clientY;
+    hSwipeReported = false;
+  }
+}, {passive:true});
+document.addEventListener('touchmove', function(e){
+  if (isVert() || hSwipeReported || !e.touches.length) return;
+  var dx = e.touches[0].clientX - hStartX, dy = e.touches[0].clientY - hStartY;
+  if (dx * dx + dy * dy > 144){ hSwipeReported = true; Bridge.userScrolled(); }
+}, {passive:true});
 document.addEventListener('wheel', function(){ if (!isVert()) Bridge.userScrolled(); }, {passive:true});
 /* 竖排 pgCur 同步：窗口与 .txt（后备主体）任一滚动都把实际页号同步回来 */
 window.addEventListener('scroll', onScrollAny, {passive:true});
