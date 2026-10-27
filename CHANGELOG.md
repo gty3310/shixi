@@ -5,7 +5,7 @@
 
 ## [1.20.4] - 2026-10-28
 
-发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.20.3...v1.20.4 · 标签 v1.20.4
+发布提交：72b1f91 · 对比：https://github.com/gty3310/shixi/compare/v1.20.3...v1.20.4 · 标签 v1.20.4
 
 ### 修复
 - 高级版识读模型下载必失败（v1.20.1 引入，用户真机实报：先在 0.0/0.0 假死、最终报「仓内找不到文件：sensevoice/model.int8.onnx」）：根因在下载计划构建顺序——旧代码对每个文件先按整文件名查 git tree 的 sha、之后才读 delivery 判定分片；仓里只有 115 个分片、没有整文件，查 sha 必然落空。基础版 encoder（11 片）同病，此前被 ensureSet 的 catch＋HuggingFace 静默兜底掩盖。修法：计划构建抽成纯逻辑类 ModelPlans（App 与桌面 harness 共用同一份），统一先读 delivery 定整件/分片——分片文件跳过整文件 sha、逐片校验 parts 路径全部命中树索引、片大小合计＝内置整件大小，缺片报错点名具体分片；整件文件才查整文件 sha。校验不放松：清单 size/md5 对内置值逐项核对、基础版 assembled_size/md5 核对、拼合后整件 size＋md5 兜底全保留
