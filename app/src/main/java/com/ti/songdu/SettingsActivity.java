@@ -49,8 +49,10 @@ public class SettingsActivity extends Activity {
     private TextView permStatus;
     private Button permButton;
     private TextView autoNote;
-    /** v1.17.0 「朗读声音」行右侧的当前所选（无双声音书时为 null） */
+    /** v1.17.0 「朗读声音」行右侧的当前所选（无双声音书时为 null）：
+     *  voiceValue＝《大学》、voiceValueZy＝《中庸》（v1.20.0） */
     private TextView voiceValue;
+    private TextView voiceValueZy;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -95,29 +97,19 @@ public class SettingsActivity extends Activity {
         loopHint.setPadding(dp(2), dp(2), 0, dp(4));
         root.addView(loopHint);
 
-        // v1.17.0 朗读声音（仅对有双声音的书显示；现仅《大学》）：
-        // 行内显示当前所选，点开进选声页重选（可试听）
+        // v1.17.0 朗读声音（仅对有双声音的书显示）：按书一行，
+        // 行内显示当前所选，点开进选声页重选（可试听）。
+        // v1.20.0：《中庸》接通双声音——其预置曲目由书库下载产生，
+        // 未下载《中庸》的用户不出现这一行（无意义入口不给）。
         if (VoicePref.hasDualVoice(this, "daxue")) {
-            LinearLayout rowVoice = rowLine();
-            TextView labVoice = rowLabel("朗读声音");
-            labVoice.setLayoutParams(new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-            rowVoice.addView(labVoice);
-            voiceValue = new TextView(this);
-            voiceValue.setTextSize(14);
-            voiceValue.setTextColor(getColor(R.color.muted));
-            rowVoice.addView(voiceValue);
-            TextView voiceGo = new TextView(this);
-            voiceGo.setText("《大学》 ›");
-            voiceGo.setTextSize(14);
-            voiceGo.setTextColor(getColor(R.color.accent));
-            voiceGo.setPadding(dp(10), 0, 0, 0);
-            rowVoice.addView(voiceGo);
-            rowVoice.setOnClickListener(v ->
-                    startActivity(VoiceChoiceActivity.forSettings(this, "daxue")));
-            root.addView(rowVoice);
-            refreshVoiceRow();
+            voiceValue = buildVoiceRow(root, "daxue", "《大学》 ›", true);
         }
+        if (VoicePref.hasDualVoice(this, "zhongyong")
+                && Store.get(this).findTrack(
+                        VoicePref.presetTrackIdFor("zhongyong")) != null) {
+            voiceValueZy = buildVoiceRow(root, "zhongyong", "《中庸》 ›", false);
+        }
+        if (voiceValue != null || voiceValueZy != null) refreshVoiceRow();
 
         addDivider(root);
 
@@ -439,11 +431,41 @@ public class SettingsActivity extends Activity {
         tv.setText(ready ? (other ? "已下载（双引擎）" : "已下载") : "未下载 · 去下载 ›");
     }
 
-    /** v1.17.0 朗读声音行：显示《大学》当前所选（未选过时明说） */
+    /** v1.20.0 朗读声音一行（按书）：左标签（组内首行带「朗读声音」，续行留空
+     *  对齐）、当前所选、右侧书名入口；点整行进该书选声页。返回该行的值视图 */
+    private TextView buildVoiceRow(LinearLayout root, final String bookId,
+                                   String goText, boolean withLabel) {
+        LinearLayout rowVoice = rowLine();
+        TextView labVoice = rowLabel(withLabel ? "朗读声音" : "");
+        labVoice.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        rowVoice.addView(labVoice);
+        TextView val = new TextView(this);
+        val.setTextSize(14);
+        val.setTextColor(getColor(R.color.muted));
+        rowVoice.addView(val);
+        TextView voiceGo = new TextView(this);
+        voiceGo.setText(goText);
+        voiceGo.setTextSize(14);
+        voiceGo.setTextColor(getColor(R.color.accent));
+        voiceGo.setPadding(dp(10), 0, 0, 0);
+        rowVoice.addView(voiceGo);
+        rowVoice.setOnClickListener(v ->
+                startActivity(VoiceChoiceActivity.forSettings(this, bookId)));
+        root.addView(rowVoice);
+        return val;
+    }
+
+    /** v1.17.0 朗读声音行：显示各双声音书当前所选（未选过时明说） */
     private void refreshVoiceRow() {
-        if (voiceValue == null) return;
-        String v = VoicePref.getVoice(this, "daxue");
-        voiceValue.setText(v == null ? "未选择" : VoicePref.voiceName(v));
+        if (voiceValue != null) {
+            String v = VoicePref.getVoice(this, "daxue");
+            voiceValue.setText(v == null ? "未选择" : VoicePref.voiceName(v));
+        }
+        if (voiceValueZy != null) {
+            String v = VoicePref.getVoice(this, "zhongyong");
+            voiceValueZy.setText(v == null ? "未选择" : VoicePref.voiceName(v));
+        }
     }
 
     private void refreshPermRow() {

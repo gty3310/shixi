@@ -26,7 +26,7 @@ $BT/aapt2 link -o $B/base.apk -I $AJAR \
   --java $B/gen \
   -A $SRC/assets \
   --min-sdk-version 26 --target-sdk-version 34 \
-  --version-code 36 --version-name 1.19.0 \
+  --version-code 37 --version-name 1.20.0 \
   $B/compiled.zip
 
 echo "[2.5/6] gen BuildInfo（构建提交短号：从 git HEAD 注入，不手写）"
@@ -36,8 +36,8 @@ cat > $B/gen/com/ti/songdu/BuildInfo.java <<EOF
 package com.ti.songdu;
 // 构建时由 build-manual.sh 生成；源文件在 build 目录内，永不提交。
 public final class BuildInfo {
-    public static final String VERSION_NAME = "1.19.0";
-    public static final int VERSION_CODE = 36;
+    public static final String VERSION_NAME = "1.20.0";
+    public static final int VERSION_CODE = 37;
     public static final String GIT_SHORT = "$GIT_SHORT";
     private BuildInfo() {}
 }

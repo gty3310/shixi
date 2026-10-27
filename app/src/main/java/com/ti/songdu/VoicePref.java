@@ -10,7 +10,8 @@ import java.util.Set;
 /**
  * v1.17.0 双声音偏好：个别书除原版录音外多一条 AI 朗读音轨（资产在
  * assets/audio_ai/<bookId>_ai.mp3 + <bookId>_ai.json，句 id 与原声内容包一致、
- * 时间轴各自实测）。目前只有《大学》。
+ * 时间轴各自实测）。v1.20.0 起《大学》《中庸》两本；《中庸》的预置曲目由
+ * 在线书库下载产生，未下载时它的设置行与首播门都不出现。
  *
  * 口径（用户定）：
  *  - 偏好按书存：voice_prefs 里 voice_pref_<bookId> = "orig"/"ai"；
@@ -65,6 +66,7 @@ public final class VoicePref {
     /** 该书的预置曲目 id（双声音只挂在这条曲目上）；无预置曲目约定的书返回 null */
     public static String presetTrackIdFor(String bookId) {
         if ("daxue".equals(bookId)) return "preset-daxue-full";
+        if ("zhongyong".equals(bookId)) return "preset-zhongyong-full";
         return null;
     }
 

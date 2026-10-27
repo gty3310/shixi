@@ -19,7 +19,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * v1.17.0 选声页：一本有双声音的书（现仅《大学》）选「法师原声 / AI 朗读」。
+ * v1.17.0 选声页：一本有双声音的书（《大学》；v1.20.0 起加《中庸》）选「法师原声 / AI 朗读」。
  *
  * 两个入口共用本页：
  *  - 首播门：PlayerService.playTrack/playTrackAt 发现未选过 → openForPlay 拉起，
