@@ -203,19 +203,43 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             }
         });
 
-        // 播放条展开手柄：单击打开当前播放音频的阅读页
-        // （只走手势检测器：单击在 onSingleTapUp 里消费掉 UP 事件，不再叠加 click，
-        //   避免打开两次阅读页、也避免冒泡到播放条的播放/暂停点击）
-        // v1.14.1：按用户要求取消「上拉展开字幕」手势——原 onFling（在手柄上
-        // 快速上滑也打开阅读页）已摘除，手柄只保留单击这一个入口；
-        // 卡片/篇行上的「阅读」钮、悬浮半圆钮长按等其他进阅读页的入口不变。
+        // 播放条「进入阅读界面」把手：点按与上滑都打开当前播放音频的阅读页，
+        // 判定走纯逻辑类 HandleGesture；与卡片/篇行上的「阅读」钮最终都汇到
+        // openReader（同一函数、同一参数），落点与跟随口径完全一致。
+        // 手势在检测器里消费掉，不叠加 click——避免打开两次阅读页，也避免
+        // 冒泡到播放条本体的播放/暂停点击。onDown 回 true 是手势检测器的
+        // 既定要求：不回 true，后续的 fling 可能根本不送达。
+        // （沿革：把手原为「上拉展开字幕」，字幕展开层早已取消；v1.14.1 曾摘除
+        //   上滑手势只留点按；v1.20.6 按用户批准方案文案改「进入阅读界面」、
+        //   点按与上滑并回同一入口，此处再无旧展开层残留。）
         View expandHandle = findViewById(R.id.btnExpandReader);
         final android.view.GestureDetector gd = new android.view.GestureDetector(this,
                 new android.view.GestureDetector.SimpleOnGestureListener() {
                     @Override
-                    public boolean onSingleTapUp(android.view.MotionEvent e) {
-                        openReaderForCurrent();
+                    public boolean onDown(android.view.MotionEvent e) {
                         return true;
+                    }
+
+                    @Override
+                    public boolean onSingleTapUp(android.view.MotionEvent e) {
+                        if (HandleGesture.onTap() == HandleGesture.Action.OPEN_READER) {
+                            openReaderForCurrent();
+                        }
+                        return true;
+                    }
+
+                    @Override
+                    public boolean onFling(android.view.MotionEvent e1, android.view.MotionEvent e2,
+                                           float velocityX, float velocityY) {
+                        if (e1 == null || e2 == null) return false;
+                        HandleGesture.Action a = HandleGesture.onFling(
+                                e2.getX() - e1.getX(), e2.getY() - e1.getY(),
+                                velocityX, velocityY);
+                        if (a == HandleGesture.Action.OPEN_READER) {
+                            openReaderForCurrent();
+                            return true;
+                        }
+                        return false;
                     }
                 });
         expandHandle.setOnTouchListener((v, ev) -> gd.onTouchEvent(ev));
@@ -873,7 +897,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private void openReaderForCurrent() {
         PlayerService svc = PlayerService.instance;
         if (svc == null || svc.current == null) {
-            Toast.makeText(this, "先选一个音频开始播放，再展开字幕", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "先选一个音频开始播放，再打开阅读页", Toast.LENGTH_SHORT).show();
             return;
         }
         if (!ContentRepo.hasContent(svc.current)) {

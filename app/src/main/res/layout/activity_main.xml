@@ -225,14 +225,14 @@
         android:orientation="vertical"
         android:padding="14dp">
 
-        <!-- 上拉展开字幕：点（或上滑）打开当前音频的阅读页 -->
+        <!-- 进入阅读界面：点按或上滑都打开当前音频的阅读页 -->
         <TextView
             android:id="@+id/btnExpandReader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center"
             android:paddingBottom="8dp"
-            android:text="︿ 上拉展开字幕"
+            android:text="进入阅读界面"
             android:textColor="#8A8174"
             android:textSize="12sp" />
 

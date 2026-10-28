@@ -1,0 +1,9 @@
+  PASS tap -> OPEN_READER
+  PASS swipe up -> OPEN_READER
+  PASS swipe up with slight dx -> OPEN_READER
+  PASS swipe down -> NONE
+  PASS horizontal fling -> NONE
+  PASS short upward flick -> NONE
+  PASS slow upward drag -> NONE
+  PASS zero velocity -> NONE
+passed=8 failed=0
