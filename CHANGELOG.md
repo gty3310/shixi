@@ -3,6 +3,18 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.20.6] - 2026-10-28
+
+发布提交：2dacb35 · 对比：https://github.com/gty3310/shixi/compare/v1.20.5...v1.20.6 · 标签 v1.20.6
+
+### 变更
+- 播放条把手「︿ 上拉展开字幕」改「进入阅读界面」（用户审定方案一）：点按与上滑（fling）两手势都打开当前播放音频的阅读页——手势判定抽成纯逻辑类 HandleGesture（点按恒 OPEN_READER；上滑须位移明显向上、带向上速度、纵向主导三门槛齐备，其余手势一律不触发），两路与卡片/篇行「阅读」钮最终都汇到同一 openReader（同一函数、同一参数），落点（当前句高亮、跟随状态机口径）与从卡片进阅读页且正在播放时完全一致，播放全程不中断。原字幕展开层早已无实体（v1.14.1 已摘其上滑手势、把手改开阅读页），本版清掉其最后残留：把手旧文案、无当前曲目时提示里的「展开字幕」字样
+- 未触碰：播放条其余部分（进度条、±15 秒、单曲循环、倍速 chips、悬浮字幕钮）、主界面卡片长按拖动排序；尚无当前曲目时播放条的显隐沿用现状逻辑，无新增空态入口
+
+### 验收
+- 桌面 harness（tools/handle_harness）直驱 App 的 HandleGesture 本体 8 项断言全过：点按→OPEN_READER；典型上滑、带小横偏上滑→OPEN_READER；下滑、横滑、位移过短、慢拖、零速度→NONE（harness_output_v1206.txt 留档）
+- 代码走查：MainActivity 中点按（onSingleTapUp）与上滑（onFling）都只经 HandleGesture 判定后调 openReaderForCurrent→openReader，与卡片入口同函数同参数；「展开字幕」在布局与代码中已无用户可见残留（仅存版本沿革注释与更新日志的历史记述）。真机把手可点范围、进页落点听感待用户实测
+
 ## [1.20.5] - 2026-10-28
 
 发布提交：aa01e75 · 对比：https://github.com/gty3310/shixi/compare/v1.20.4...v1.20.5 · 标签 v1.20.5
