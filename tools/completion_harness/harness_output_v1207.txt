@@ -1,0 +1,5 @@
+  PASS loop on, has next -> RESTART
+  PASS loop on, no next -> RESTART
+  PASS loop off, has next -> ADVANCE
+  PASS loop off, no next -> STOP
+CompletionHarness: 4 passed, 0 failed

@@ -67,7 +67,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     public static final String EXTRA_OPEN_ADD = "open_add_dialog";
 
     private TextView tvDate, tvEmpty;
-    private TextView nowTitle, nowPos, nowDur, btnBarToggle;
+    private TextView nowTitle, nowPos, nowDur, btnBarToggle, nowLoop;
     /** v1.11.0 播放器栏「悬浮字幕」钮（状态靠样式，见 refreshOverlayBtn） */
     private TextView btnOverlaySub;
     private SeekBar playerSeek;
@@ -133,6 +133,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         nowPos = findViewById(R.id.nowPos);
         nowDur = findViewById(R.id.nowDur);
         btnBarToggle = findViewById(R.id.btnBarToggle);
+        nowLoop = findViewById(R.id.nowLoop);
         playerSeek = findViewById(R.id.playerSeek);
         speedRow = findViewById(R.id.speedRow);
         dayList = findViewById(R.id.dayList);
@@ -250,6 +251,24 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             }
         };
         btnBarToggle.setOnClickListener(toggleClick);
+        // v1.20.7：播放条上的「单曲循环」就是开关本人（此前是写死文字、与真开关
+        // 脱节）：点它经 PlayerService.setLoopEnabled 改真源并持久化；服务不在时
+        // 直接写同一份 reader_prefs/loop，服务下次起来读到的就是它
+        nowLoop.setOnClickListener(v -> {
+            PlayerService svc = PlayerService.instance;
+            boolean now;
+            if (svc != null) {
+                now = !svc.loopEnabled;
+                svc.setLoopEnabled(now);
+            } else {
+                SharedPreferences rp = getSharedPreferences("reader_prefs", MODE_PRIVATE);
+                now = !rp.getBoolean("loop", true);
+                rp.edit().putBoolean("loop", now).apply();
+            }
+            refreshPlayerBar();
+            Toast.makeText(this, now ? "单曲循环已开" : "单曲循环已关",
+                    Toast.LENGTH_SHORT).show();
+        });
         findViewById(R.id.btnBack15).setOnClickListener(v -> sendSeekRel(-15000));
         findViewById(R.id.btnFwd15).setOnClickListener(v -> sendSeekRel(15000));
 
@@ -1880,6 +1899,12 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
     private void refreshPlayerBar() {
         PlayerService svc = PlayerService.instance;
+        // v1.20.7：循环显示只认真源（服务字段；服务不在时读同一份持久化），
+        // 不再写死「开」——显示什么就是什么，标题的「正在循环播放」同理
+        boolean loopOn = svc != null ? svc.loopEnabled
+                : getSharedPreferences("reader_prefs", MODE_PRIVATE)
+                        .getBoolean("loop", true);
+        nowLoop.setText(loopOn ? "单曲循环 开" : "单曲循环 关");
         if (svc == null || svc.current == null) {
             nowTitle.setText("未在播放");
             nowPos.setText("0:00");
@@ -1897,7 +1922,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         } else if (svc.followEnabled && svc.followPhase == PlayerService.FOLLOW_PLAYING) {
             nowTitle.setText("跟读已暂停 · " + cur.title);
         } else {
-            nowTitle.setText((svc.playing ? "正在循环播放 · " : "已暂停 · ") + cur.title);
+            nowTitle.setText((svc.playing
+                    ? (loopOn ? "正在循环播放 · " : "正在播放 · ")
+                    : "已暂停 · ") + cur.title);
         }
         btnBarToggle.setText(svc.playing ? "❚❚" : "▶");
         // v1.17.0：总时长/进度按当前声音口径（AI 音轨时长与原声不同）

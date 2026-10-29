@@ -110,7 +110,11 @@ public class PlayerService extends Service {
     private boolean restarting = false;
     public Track current;
     public boolean playing = false;
-    /** v1.4 阅读页的单曲循环开关：默认 true，与 v1.0–v1.3 的行为完全一致（播完计遍后自动重播）。
+    /** 单曲循环开关的唯一真源（字段＋reader_prefs/loop 持久化）：主界面播放条、
+     *  阅读页、总设置页三处显示与修改都必须经本字段/setLoopEnabled，不许另写死
+     *  文案——v1.20.6 以前主界面的「单曲循环 开」是写死文字、与真开关脱节，
+     *  是「显示开着却播完就停」的根源之一（v1.20.7 修）。
+     *  v1.4 阅读页的单曲循环开关：默认 true，与 v1.0–v1.3 的行为完全一致（播完计遍后自动重播）。
      *  v1.14.1：进总设置页（「播放」组）；持久化沿用阅读页既有的
      *  reader_prefs/loop（v1.4 起就在用的键，不另起一份免得两处打架），
      *  读写统一走 setLoopEnabled，onCreate 恢复。关掉时播完计数后自动接
@@ -681,12 +685,20 @@ public class PlayerService extends Service {
         followPhase = FOLLOW_IDLE;
         followIndex = -1;
         followGapPaused = false;
-        if (loopEnabled) {
-            replayFromStart();
-        } else if (!advanceToNextTrack()) {
-            // v1.14.1：跟读下循环关同样自动接下一本（playTrack 内部已复位跟读
-            // 状态机、无原文则自动关跟读）；没有下一本才停，跟读开关保持开
-            playing = false;
+        // v1.20.7：与 onCompletion 同一判定（CompletionPolicy）：循环开→从头重播；
+        // 循环关→自动接可接的下一本（playTrack 内部已复位跟读状态机、无原文则
+        // 自动关跟读）；没有可接的才停，跟读开关保持开
+        replayRetryUsed = false;
+        switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
+            case ADVANCE:
+                advanceToNextTrack();
+                break;
+            case STOP:
+                playing = false;
+                break;
+            default: // RESTART
+                replayFromStart();
+                break;
         }
         updateNotification();
         notifyState();
@@ -806,21 +818,36 @@ public class PlayerService extends Service {
     }
 
     /**
+     * v1.20.7：循环关时可自动接播的下一曲——列表顺序的下一曲，且不是「未选声」
+     * 的双声音书。那种书 playTrack 会先拉选声页、并不出声（首播选声门），自动
+     * 接播撞上它会出现「报了已接、实际没声」的静默停播；息屏续播时选声页还会被
+     * 系统的后台启动限制拦下，连页面都看不到。故不算可接、返回 null，播完停下，
+     * 等用户手动点开那本时再选声。当前已是最后一曲（或找不到当前曲）同样为 null。
+     */
+    private Track nextPlayableTrack() {
+        if (current == null) return null;
+        for (int i = 0; i < store.tracks.size(); i++) {
+            if (store.tracks.get(i).id.equals(current.id)) {
+                if (i + 1 >= store.tracks.size()) return null;
+                Track next = store.tracks.get(i + 1);
+                if (VoicePref.needsChoice(this, next)) return null;
+                return next;
+            }
+        }
+        return null;
+    }
+
+    /**
      * v1.14.1：循环关时一本读完自动接下一本——按列表顺序取下一曲并播放，
-     * 成功返回 true；当前已是最后一曲（或找不到当前曲）返回 false，调用方停下。
+     * 成功返回 true；没有可接的下一曲返回 false，调用方停下。
      * 与手动 skip 的区别：不绕回开头。计数在调用前已完成，本方法只管切歌；
      * 新曲按 playTrack 既有口径从它上次的位置续播。
      */
     private boolean advanceToNextTrack() {
-        if (current == null) return false;
-        for (int i = 0; i < store.tracks.size(); i++) {
-            if (store.tracks.get(i).id.equals(current.id)) {
-                if (i + 1 >= store.tracks.size()) return false;
-                playTrack(store.tracks.get(i + 1));
-                return true;
-            }
-        }
-        return false;
+        Track next = nextPlayableTrack();
+        if (next == null) return false;
+        playTrack(next);
+        return true;
     }
 
     /** 上一首/下一首：按列表顺序切歌（单曲循环仍是默认，切歌只来自用户手动操作） */
@@ -960,17 +987,21 @@ public class PlayerService extends Service {
                 store.saveTracks();
                 if (listener != null) listener.onCountChanged();
             }
-            if (!loopEnabled) {
-                // v1.14.1：循环关不再是 v1.4 的「计完这一遍就停」——计数已在上方
-                // 完成（口径不变），自动接列表顺序的下一本；最后一本读完才停。
-                // 默认开的行为完全不变。
-                if (advanceToNextTrack()) return;
-                playing = false;
-                updateNotification();
-                notifyState();
-                return;
+            // v1.20.7：播完去向统一走 CompletionPolicy（与跟读 finishFollowPass
+            // 同一判定）：循环开→计数后从头重播；循环关→自动接可接的下一本
+            // （v1.14.1 口径，接不上才停）。计数已在上方完成，不与去向互相牺牲。
+            replayRetryUsed = false;
+            switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
+                case ADVANCE:
+                    advanceToNextTrack();
+                    break;
+                case STOP:
+                    playing = false;
+                    break;
+                default: // RESTART
+                    replayFromStart();
+                    break;
             }
-            replayFromStart();
             updateNotification();
             notifyState();
         });
@@ -1082,8 +1113,16 @@ public class PlayerService extends Service {
         notifyState();
     }
 
+    /** v1.20.7：播完重播的一次性兜底标记——重播装载失败时只许再走一次完整
+     *  playTrack 装载，防失败重试成死循环；每次播完判定前与切歌时清零 */
+    private boolean replayRetryUsed = false;
+
     /** 播完一遍后的重播：reset → 重设唤醒/属性 → setDataSource → prepareAsync，
-     *  后续 start 统一在 onPrepared 里完成（取焦点＋重应用倍速），路径明确、无竞速。 */
+     *  后续 start 统一在 onPrepared 里完成（取焦点＋重应用倍速），路径明确、无竞速。
+     *  v1.20.7 加固：旧版 catch 把异常全吞——装载一失败就无声无息停在结尾，
+     *  界面还照旧显示在播。现失败时兜底走一次 playTrack(current) 的完整装载
+     *  路径（此刻 prepared 已置假、不会走同曲早退分支）；再失败才如实停下，
+     *  调用方的 notifyState 会把状态落回暂停，不假装还在播。 */
     private void replayFromStart() {
         if (current == null) return;
         ensurePlayer();
@@ -1099,11 +1138,16 @@ public class PlayerService extends Service {
         } catch (Exception e) {
             restarting = false;
             preparing = false;
+            if (!replayRetryUsed) {
+                replayRetryUsed = true;
+                playTrack(current);
+            }
         }
     }
 
     public void playTrack(Track t) {
         if (t == null) return;
+        replayRetryUsed = false; // v1.20.7：新装载起，播完重播的兜底次数重新计
         // v1.17.0 首播选声门：双声音书尚未选过 → 任何入口都先拉选声页，
         // 选定后由选声页重新发起播放，本次不装载、不出声（不许绕过）
         if (VoicePref.needsChoice(this, t)) {
