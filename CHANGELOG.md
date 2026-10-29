@@ -3,6 +3,19 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.20.7] - 2026-10-29
+
+发布提交：dd35a15 · 对比：https://github.com/gty3310/shixi/compare/v1.20.6...v1.20.7 · 标签 v1.20.7
+
+### 修复
+- 循环播放失效（用户真机实报：播放条显示单曲循环开、一本读完却停）：根因一＝主界面播放条的「单曲循环 开」自 v1.7.0 起是写死文字（布局里无 id、无点击处理、从不读真实开关），标题「正在循环播放」也只要在播就无条件显示；真实开关（reader_prefs/loop → PlayerService.loopEnabled）只在阅读页与总设置页可见可改——开关在别处关掉时，主界面照样显示开，播完却按关的口径自动接下一本或停下，两处脱节正是用户怀疑的「某个功能冲突」。修：该文字加 id 并成真开关——显示只认真源（服务字段，服务不在时读同一份持久化）、点它经 setLoopEnabled 修改并持久化；标题按真状态分「正在循环播放／正在播放／已暂停」
+- 根因二＝播完路径两处静默停播：其一，replayFromStart 的 catch 全吞异常，播完重播装载一失败就无声停在结尾、界面还显示在播——现失败时兜底走一次 playTrack(current) 完整装载（一次性标记防死循环，每次播完判定前与切歌时清零），再失败才如实落回暂停态。其二，循环关自动接播时 playTrack 若撞上双声音书的「未选声」门会直接返回不播、advanceToNextTrack 却报成功（息屏时选声页还会被系统后台启动限制拦下）——新增 nextPlayableTrack：未选声的书不算可接播，播完如实停下，等用户手动点开时选声
+- 播完去向抽成纯逻辑类 CompletionPolicy（decide(循环开关, 有无可接下一本) → RESTART／ADVANCE／STOP），普通播放的 onCompletion 与跟读的 finishFollowPass 共用同一判定；遍数计数仍在判定前统一完成（口径不变），计数与循环不再互相牺牲。排查排除项：SpeedRestarter 只由改速触发、FollowGate 只在阅读页边沿判定，均与播完路径无涉；跟读模式与声音轨（原声／AI）不改变去向矩阵
+
+### 验收
+- 桌面 harness（tools/completion_harness）直驱 App 的 CompletionPolicy 本体 4 项断言全过：循环开×有/无下一本→RESTART；循环关×有可接→ADVANCE；循环关×无可接→STOP（harness_output_v1207.txt 留档）
+- 代码走查：主界面循环显示与点击、服务真源、持久化三者同键（reader_prefs/loop）；onCompletion 与 finishFollowPass 均已改走同一判定；aapt2 badging 实测 versionCode 44／versionName 1.20.7，构建含识读原生库，BuildInfo 构建短号＝发布提交 dd35a15。真机未验：开循环拖到结尾听回绕接续与计数 +1、关循环时标题与接播行为、回绕间隙听感，待用户实测
+
 ## [1.20.6] - 2026-10-28
 
 发布提交：2dacb35 · 对比：https://github.com/gty3310/shixi/compare/v1.20.5...v1.20.6 · 标签 v1.20.6
