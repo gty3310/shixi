@@ -79,9 +79,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private GridLayout calGrid;
     private TextView calMonthTitle, calMonthTotal;
     private View pagePlay;
-    private ScrollView pageCalendar;
-    private Button navPlay, navCal;
-    /** v1.16.0 底部三栏：复习页（WebView）与当前页下标（0 听 / 1 历史记录 / 2 复习） */
+    /** v1.21.0 底部三栏改定案：0 听读 / 1 复习 / 2 阅读计划（原历史记录整块迁入计划页作诵读日历） */
+    private ScrollView pagePlan;
+    private LinearLayout planContainer, todayPlanBand;
+    private Button navPlay, navPlan;
     private android.webkit.WebView pageReview;
     private Button navReview;
     private int curPage = 0;
@@ -142,9 +143,11 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         calMonthTitle = findViewById(R.id.calMonthTitle);
         calMonthTotal = findViewById(R.id.calMonthTotal);
         pagePlay = findViewById(R.id.pagePlay);
-        pageCalendar = findViewById(R.id.pageCalendar);
+        pagePlan = findViewById(R.id.pagePlan);
+        planContainer = findViewById(R.id.planContainer);
+        todayPlanBand = findViewById(R.id.todayPlanBand);
         navPlay = findViewById(R.id.navPlay);
-        navCal = findViewById(R.id.navCal);
+        navPlan = findViewById(R.id.navPlan);
         pageReview = findViewById(R.id.pageReview);
         navReview = findViewById(R.id.navReview);
         pageReview.getSettings().setJavaScriptEnabled(true);
@@ -278,8 +281,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             }
         });
         navPlay.setOnClickListener(v -> showPage(0));
-        navCal.setOnClickListener(v -> showPage(1));
-        navReview.setOnClickListener(v -> showPage(2));
+        navReview.setOnClickListener(v -> showPage(1));
+        navPlan.setOnClickListener(v -> showPage(2));
 
         // Android 13+ 通知权限（前台服务媒体通知需要）
         if (Build.VERSION.SDK_INT >= 33
@@ -1062,6 +1065,16 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         all.setTextSize(13);
         all.setTextColor(getColor(R.color.muted));
         line1.addView(all);
+        if ("论语".equals(group)) {
+            // v1.21.0 章即小书：组头进入论语章（篇）卡片列表
+            TextView chEntry = new TextView(this);
+            chEntry.setText("  章列表 ›");
+            chEntry.setTextSize(13);
+            chEntry.setTextColor(getColor(R.color.accent));
+            chEntry.setOnClickListener(v -> startActivity(new Intent(this, ChapterListActivity.class)
+                    .putExtra(ChapterListActivity.EXTRA_BOOK_ID, "lunyu")));
+            line1.addView(chEntry);
+        }
         col.addView(line1);
 
         int todayPian = 0, todaySum = 0, monthPian = 0;
@@ -1521,6 +1534,19 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             btnRead.setVisibility(View.GONE);
         }
 
+        // v1.21.0 章列表入口：有内容包且章数 > 1 的书，卡上进章卡片列表（章即小书）
+        Button btnChapters = card.findViewById(R.id.btnChapters);
+        String cardBookId = PlanBooks.bookIdOfTrackFull(t);
+        ContentRepo.Book cardBook = cardBookId != null ? ContentRepo.load(this, cardBookId) : null;
+        if (cardBook != null && cardBook.chapters.size() > 1) {
+            btnChapters.setVisibility(View.VISIBLE);
+            final String bid = cardBookId;
+            btnChapters.setOnClickListener(v -> startActivity(new Intent(this, ChapterListActivity.class)
+                    .putExtra(ChapterListActivity.EXTRA_BOOK_ID, bid)));
+        } else {
+            btnChapters.setVisibility(View.GONE);
+        }
+
         btnPlay.setOnClickListener(v -> onPlayToggle(t));
         btnDelete.setOnClickListener(v -> onDelete(t));
         btnSettings.setOnClickListener(v -> startActivity(
@@ -1613,21 +1639,439 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         }
     }
 
-    // ---------- 页面切换（v1.16.0 底部三栏：0 听 / 1 历史记录 / 2 复习） ----------
+    // ---------- 页面切换（v1.21.0 底部三栏：0 听读 / 1 复习 / 2 阅读计划） ----------
     private void showPage(int page) {
         curPage = page;
-        showingCalendar = page == 1;
+        showingCalendar = page == 2;
         pagePlay.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
-        pageCalendar.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
-        pageReview.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
-        Button[] navs = {navPlay, navCal, navReview};
+        pageReview.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
+        pagePlan.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
+        Button[] navs = {navPlay, navReview, navPlan};
         for (int i = 0; i < navs.length; i++) {
             boolean on = i == page;
             navs[i].setTextColor(getColor(on ? R.color.accent : R.color.muted));
             navs[i].setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
         }
-        if (page == 1) buildCalendar();
-        if (page == 2) loadReviewPage();
+        if (page == 1) loadReviewPage();
+        if (page == 2) {
+            buildPlanPage();
+            buildCalendar();
+        }
+    }
+
+    // ---------- v1.21.0 阅读计划页 ----------
+
+    private TextView planText(String text, float sp, int color, boolean bold) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(sp);
+        tv.setTextColor(getColor(color));
+        if (bold) tv.setTypeface(null, Typeface.BOLD);
+        return tv;
+    }
+
+    private TextView planTextLp(String text, float sp, int color, boolean bold, int topMargin) {
+        TextView tv = planText(text, sp, color, bold);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(topMargin);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    private View planCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundResource(R.drawable.card_bg);
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(12);
+        card.setLayoutParams(lp);
+        return card;
+    }
+
+    /** 阅读计划页上半（下半诵读日历在布局里、由 buildCalendar 填充，口径不改） */
+    private void buildPlanPage() {
+        if (planContainer == null) return;
+        planContainer.removeAllViews();
+        PlanStore ps = PlanStore.get(this);
+        PlanData plan = ps.plan();
+        LocalDate today = LocalDate.now();
+        if (plan == null || PlanData.STATUS_FINISHED.equals(plan.status)) {
+            if (plan != null) {
+                planContainer.addView(planTextLp("上一个计划已结束", 13, R.color.muted, false, 2));
+            }
+            LinearLayout card = (LinearLayout) planCard();
+            card.addView(planText("9621 读经大挑战", 19, R.color.ink, true));
+            card.addView(planTextLp("九个月内读完 · 六本书 · 每本 21 遍", 13.5f, R.color.muted, false, 6));
+            card.addView(planTextLp("大学 · 中庸 · 论语 · 孟子 · 坛经 · 道德经", 13.5f, R.color.muted, false, 2));
+            TextView use = planTextLp("选用这个计划", 15, R.color.accent, true, 12);
+            use.setGravity(Gravity.CENTER);
+            use.setOnClickListener(v -> startActivity(new Intent(this, PlanEditActivity.class)
+                    .putExtra(PlanEditActivity.EXTRA_MODE, PlanEditActivity.MODE_PRESET)));
+            card.addView(use);
+            planContainer.addView(card);
+
+            LinearLayout custom = (LinearLayout) planCard();
+            custom.addView(planText("自定计划", 17, R.color.ink, true));
+            custom.addView(planTextLp("按自己的书目、遍数与期限排", 13.5f, R.color.muted, false, 4));
+            custom.setOnClickListener(v -> startActivity(new Intent(this, PlanEditActivity.class)
+                    .putExtra(PlanEditActivity.EXTRA_MODE, PlanEditActivity.MODE_CUSTOM)));
+            planContainer.addView(custom);
+            return;
+        }
+
+        PlanEngine.Result res = ps.compute(today);
+        ps.persistDerived(res);
+        boolean paused = PlanData.STATUS_PAUSED.equals(plan.status);
+
+        // 头部
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView name = planText(plan.name, 20, R.color.ink, true);
+        name.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        head.addView(name);
+        TextView settings = planText("设置", 13.5f, R.color.muted, false);
+        settings.setBackgroundResource(R.drawable.pill_outline);
+        settings.setPadding(dp(12), dp(6), dp(12), dp(6));
+        settings.setOnClickListener(v -> startActivity(new Intent(this, PlanEditActivity.class)
+                .putExtra(PlanEditActivity.EXTRA_MODE, PlanEditActivity.MODE_SETTINGS)));
+        head.addView(settings);
+        planContainer.addView(head);
+
+        LocalDate dl = LocalDate.parse(plan.deadline);
+        planContainer.addView(planTextLp("截止 " + dl.getYear() + " 年 " + dl.getMonthValue()
+                + " 月 " + dl.getDayOfMonth() + " 日 · 还剩 " + Math.max(0, res.remainingDays) + " 天",
+                13.5f, R.color.muted, false, 6));
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(res.totalProgressPct);
+        bar.setProgressTintList(android.content.res.ColorStateList.valueOf(getColor(R.color.accent)));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+        blp.topMargin = dp(10);
+        bar.setLayoutParams(blp);
+        planContainer.addView(bar);
+        planContainer.addView(planTextLp("总进度 " + res.totalProgressPct + "%", 13, R.color.muted, false, 4));
+        String statusLine;
+        if (paused) {
+            statusLine = "已暂停";
+        } else if (res.finished) {
+            statusLine = "已读完";
+        } else if (res.pace == PlanEngine.Pace.SLOW) {
+            statusLine = "慢于节奏 · 预计晚 " + res.lateDays + " 天";
+        } else {
+            String verb = res.pace == PlanEngine.Pace.FAST ? "比节奏快" : "正好在节奏上";
+            LocalDate pf = res.predictedFinish;
+            statusLine = verb + (pf != null ? " · 预计 " + pf.getYear() + " 年 " + pf.getMonthValue()
+                    + " 月 " + pf.getDayOfMonth() + " 日读毕" : "");
+        }
+        planContainer.addView(planTextLp(statusLine, 14.5f, R.color.ink, false, 6));
+
+        // 今日块
+        planContainer.addView(planTextLp("今 日", 13, R.color.accent, true, 20));
+        if (paused) {
+            planContainer.addView(planTextLp("计划暂停中 · 到设置里恢复", 15, R.color.muted, false, 6));
+        } else if (res.currentStage < 0) {
+            planContainer.addView(planTextLp("六本书都读完了", 15, R.color.ink, false, 6));
+        } else {
+            buildPlanTodayBlock(ps, plan, res, today);
+        }
+
+        // 阶段表
+        planContainer.addView(planTextLp("阶 段", 13, R.color.accent, true, 20));
+        ChapterStatsStore stats = ChapterStatsStore.get(this);
+        for (int i = 0; i < plan.stages.size(); i++) {
+            PlanData.Stage st = plan.stages.get(i);
+            int done = res.donePerStage.get(i);
+            boolean completed = res.completedPerStage.get(i);
+            boolean avail = PlanBooks.isAvailable(this, st.bookId);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rlp.topMargin = dp(8);
+            row.setLayoutParams(rlp);
+            TextView nm = planText("《" + st.bookTitle + "》", 15.5f, R.color.ink, false);
+            nm.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row.addView(nm);
+            String right;
+            if (completed) right = "已完成 ✓";
+            else if (i == res.currentStage) {
+                int curPass = st.totalUnits > 0
+                        ? Math.min(st.totalPasses, done * st.totalPasses / st.totalUnits + 1) : 1;
+                right = st.isZhang() ? "进行中 · 第 " + curPass + " 遍" : "第 " + curPass + " 遍 · 进行中";
+            } else if (!avail) right = "还没下载 · 手动记录";
+            else right = "0 / " + st.totalPasses + " 遍";
+            row.addView(planText(right, 13.5f, completed ? R.color.accent : R.color.muted, false));
+            planContainer.addView(row);
+            if (st.isZhang()) {
+                planContainer.addView(planTextLp("细账 " + done + " / " + st.totalUnits + " "
+                        + st.unitName + "·遍（见章卡片）", 12, R.color.muted, false, 1));
+            }
+        }
+        if ("preset9621".equals(plan.source)) {
+            planContainer.addView(planTextLp("原表建议节奏  大学 5 遍/天 · 中庸 3 遍/天 · 论语 5 遍/章/天"
+                    + " · 孟子 3 遍/章/天 · 坛经 5 遍/章/天 · 道德经 10 遍/5 章/天", 11.5f, R.color.muted, false, 12));
+        }
+        planContainer.addView(planTextLp("整轨自然播完才计一遍 · 跟读遍也算 · 章级播到章尾记一遍",
+                11.5f, R.color.muted, false, 4));
+
+        // 近况热力格
+        planContainer.addView(planTextLp("近 况", 13, R.color.accent, true, 20));
+        GridLayout heat = new GridLayout(this);
+        heat.setColumnCount(14);
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hlp.topMargin = dp(8);
+        heat.setLayoutParams(hlp);
+        int cellW = (getResources().getDisplayMetrics().widthPixels - dp(32) - dp(26)) / 14;
+        for (int back = 97; back >= 0; back--) {
+            LocalDate d = today.minusDays(back);
+            int total = store.totalCountOn(d) + manualUnitsOn(ps, d);
+            TextView cell = new TextView(this);
+            GridLayout.LayoutParams clp = new GridLayout.LayoutParams();
+            clp.width = cellW - dp(2);
+            clp.height = cellW - dp(2);
+            clp.setMargins(0, 0, dp(2), dp(2));
+            cell.setLayoutParams(clp);
+            GradientDrawable g = new GradientDrawable();
+            g.setCornerRadius(dp(2));
+            int color = total <= 0 ? 0xFFECE7DB : total <= 2 ? 0xFFDCE3D0
+                    : total <= 4 ? 0xFFB9C9A4 : total <= 8 ? 0xFF8FAE7E : 0xFF6E9463;
+            g.setColor(color);
+            if (d.equals(today)) g.setStroke(dp(2), getColor(R.color.accent));
+            cell.setBackground(g);
+            heat.addView(cell);
+        }
+        planContainer.addView(heat);
+    }
+
+    private int manualUnitsOn(PlanStore ps, LocalDate date) {
+        PlanData plan = ps.plan();
+        if (plan == null) return 0;
+        Map<Integer, Integer> m = plan.manualEntries.get(date.toString());
+        if (m == null) return 0;
+        int sum = 0;
+        for (int v : m.values()) sum += v;
+        return sum;
+    }
+
+    private void buildPlanTodayBlock(PlanStore ps, PlanData plan, PlanEngine.Result res, LocalDate today) {
+        final int ci = res.currentStage;
+        PlanData.Stage st = plan.stages.get(ci);
+        boolean avail = PlanBooks.isAvailable(this, st.bookId);
+        int target = res.todaySuggestionUnits;
+        int done = res.todayDone;
+        if (target > 0 && done >= target) {
+            planContainer.addView(planTextLp("今日建议已完成", 16, R.color.ink, true, 6));
+        } else if (st.isZhang()) {
+            planContainer.addView(planTextLp("《" + st.bookTitle + "》 建议 读 " + res.todayK + " "
+                    + st.unitName + " · 每" + st.unitName + " " + res.todayN + " 遍", 16, R.color.ink, false, 6));
+            planContainer.addView(planTextLp("已记 " + done + " " + st.unitName + "·遍"
+                    + (target > done ? " · 还差 " + (target - done) + " " + st.unitName + "·遍" : ""),
+                    13.5f, R.color.muted, false, 2));
+        } else {
+            planContainer.addView(planTextLp("《" + st.bookTitle + "》 建议 " + target + " 遍 · 已读 "
+                    + done + " 遍", 16, R.color.ink, false, 6));
+            if (target > done) {
+                String extra = "还差 " + (target - done) + " 遍";
+                long passMs = PlanBooks.bookPassDurationMs(store, st.bookId);
+                if (passMs > 0 && store.speed > 0) {
+                    long mins = Math.round(passMs * (target - done) / 60000.0 / store.speed);
+                    extra += " · 约 " + Math.max(1, mins) + " 分钟";
+                }
+                planContainer.addView(planTextLp(extra, 13.5f, R.color.muted, false, 2));
+            }
+            // 每单位一圆，满者朱砂（建议量过大时只画到达标线所需，封顶 30 枚防版面失控）
+            if (target > 0 && target <= 30) {
+                LinearLayout dots = new LinearLayout(this);
+                dots.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                dlp.topMargin = dp(8);
+                dots.setLayoutParams(dlp);
+                for (int i = 0; i < target; i++) {
+                    TextView dot = new TextView(this);
+                    GradientDrawable g = new GradientDrawable();
+                    g.setShape(GradientDrawable.OVAL);
+                    if (i < done) g.setColor(getColor(R.color.accent));
+                    else { g.setColor(0x00000000); g.setStroke(dp(1), 0xFFB9B1A2); }
+                    dot.setBackground(g);
+                    LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(dp(13), dp(13));
+                    lp2.rightMargin = dp(6);
+                    dot.setLayoutParams(lp2);
+                    dots.addView(dot);
+                }
+                planContainer.addView(dots);
+            }
+        }
+        // 覆盖提示：阶段将满且有未读章（只提示不拦截；仅章账可查的书）
+        if (st.isZhang() && avail && st.totalUnits > 0
+                && res.donePerStage.get(ci) * 5 >= st.totalUnits * 4) {
+            ChapterStatsStore stats = ChapterStatsStore.get(this);
+            int unread = 0;
+            for (int c = 0; c < st.chapterCount; c++) {
+                if (stats.chapterTotal(st.bookId, c) <= 0) unread++;
+            }
+            if (unread > 0) {
+                planContainer.addView(planTextLp("还有 " + unread + " " + st.unitName + "未读过",
+                        12.5f, R.color.muted, false, 6));
+            }
+        }
+        // 手动入账入口
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.topMargin = dp(10);
+        btns.setLayoutParams(blp);
+        if (!avail) {
+            TextView doneBtn = planText("今日已按建议读完", 13.5f, R.color.ink, false);
+            doneBtn.setBackgroundResource(R.drawable.pill_outline);
+            doneBtn.setPadding(dp(12), dp(7), dp(12), dp(7));
+            doneBtn.setOnClickListener(v -> {
+                ps.addManualToday(ci, target, today);
+                buildPlanPage();
+                buildPlanBand();
+            });
+            btns.addView(doneBtn);
+        }
+        TextView noteBtn = planText("记一笔", 13.5f, R.color.ink, false);
+        noteBtn.setBackgroundResource(R.drawable.pill_outline);
+        noteBtn.setPadding(dp(12), dp(7), dp(12), dp(7));
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nlp.leftMargin = dp(8);
+        noteBtn.setLayoutParams(nlp);
+        noteBtn.setOnClickListener(v -> showPlanNoteDialog(ps, st, ci, today));
+        btns.addView(noteBtn);
+        planContainer.addView(btns);
+    }
+
+    private void showPlanNoteDialog(PlanStore ps, PlanData.Stage st, int stageIdx, LocalDate today) {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), 0);
+        final EditText first = new EditText(this);
+        first.setInputType(InputType.TYPE_CLASS_NUMBER);
+        first.setTextSize(16);
+        final EditText second = new EditText(this);
+        second.setInputType(InputType.TYPE_CLASS_NUMBER);
+        second.setTextSize(16);
+        if (st.isZhang()) {
+            first.setHint("读了几" + st.unitName + "（如 1）");
+            second.setHint("每" + st.unitName + "几遍（如 " + Math.max(1, st.passesPerChapter) + "）");
+            form.addView(first);
+            form.addView(second);
+        } else {
+            first.setHint("读了几遍");
+            form.addView(first);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("记一笔 · 《" + st.bookTitle + "》")
+                .setView(form)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("记下", (d, w) -> {
+                    int a = parsePlanInt(first.getText().toString(), 0);
+                    int units;
+                    if (st.isZhang()) {
+                        int b = parsePlanInt(second.getText().toString(), 0);
+                        units = a * b;
+                    } else units = a;
+                    if (units <= 0) {
+                        Toast.makeText(this, "没有填数量", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    ps.addManualToday(stageIdx, units, today);
+                    Toast.makeText(this, "已记 " + units + (st.isZhang() ? " " + st.unitName + "·遍" : " 遍"),
+                            Toast.LENGTH_SHORT).show();
+                    buildPlanPage();
+                    buildPlanBand();
+                })
+                .show();
+    }
+
+    private int parsePlanInt(String s, int fallback) {
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return fallback; }
+    }
+
+    /** 首页今日进度带（候选 A）：仅 active 计划时渲染，点按跳阅读计划页 */
+    private void buildPlanBand() {
+        if (todayPlanBand == null) return;
+        todayPlanBand.removeAllViews();
+        PlanStore ps = PlanStore.get(this);
+        PlanData plan = ps.plan();
+        if (plan == null || !PlanData.STATUS_ACTIVE.equals(plan.status)) {
+            todayPlanBand.setVisibility(View.GONE);
+            return;
+        }
+        PlanEngine.Result res = ps.compute(LocalDate.now());
+        if (res == null || res.currentStage < 0) {
+            todayPlanBand.setVisibility(View.GONE);
+            return;
+        }
+        PlanData.Stage st = plan.stages.get(res.currentStage);
+        int target = res.todaySuggestionUnits;
+        int done = res.todayDone;
+        boolean finishedToday = target > 0 && done >= target;
+        TextView line = new TextView(this);
+        line.setTextSize(14);
+        line.setTextColor(getColor(R.color.ink));
+        String txt;
+        if (st.isZhang()) {
+            txt = "今日 《" + st.bookTitle + "》 建议 读 " + res.todayK + " " + st.unitName
+                    + " · 每" + st.unitName + " " + res.todayN + " 遍 · 已记 " + done + " "
+                    + st.unitName + "·遍" + (finishedToday ? "" : " · 还差 " + Math.max(0, target - done)
+                    + " " + st.unitName + "·遍");
+        } else {
+            txt = "今日 《" + st.bookTitle + "》 建议 " + target + " 遍 · 已读 " + done + " 遍"
+                    + (finishedToday ? "" : " · 还差 " + Math.max(0, target - done) + " 遍");
+        }
+        line.setText(txt);
+        todayPlanBand.addView(line);
+        if (finishedToday) {
+            TextView check = new TextView(this);
+            check.setText("✓");
+            check.setTextSize(13);
+            check.setTextColor(0xFF8FAE7E);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            clp.leftMargin = dp(6);
+            // 放在同一行：重组为横行
+            todayPlanBand.removeAllViews();
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            line.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row.addView(line);
+            row.addView(check);
+            todayPlanBand.addView(row);
+        }
+        // 极细进度线：朱砂只走已完成段
+        LinearLayout lineBar = new LinearLayout(this);
+        lineBar.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(3));
+        llp.topMargin = dp(6);
+        lineBar.setLayoutParams(llp);
+        int totalW = Math.max(1, target);
+        View fill = new View(this);
+        fill.setBackgroundColor(getColor(R.color.accent));
+        fill.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT,
+                Math.min(done, totalW)));
+        lineBar.addView(fill);
+        View rest = new View(this);
+        rest.setBackgroundColor(0xFFE9E2D6);
+        rest.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT,
+                Math.max(0, totalW - Math.min(done, totalW))));
+        lineBar.addView(rest);
+        todayPlanBand.addView(lineBar);
+        todayPlanBand.setVisibility(View.VISIBLE);
+        todayPlanBand.setOnClickListener(v -> showPage(2));
     }
 
     // ---------- v1.16.0 复习页 ----------
@@ -1894,7 +2338,11 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         buildTrackList();
         refreshPlayerBar();
         refreshSpeedChips();
-        if (showingCalendar) buildCalendar();
+        buildPlanBand();
+        if (showingCalendar) {
+            buildPlanPage();
+            buildCalendar();
+        }
     }
 
     private void refreshPlayerBar() {

@@ -1,0 +1,38 @@
+  PASS deadline Jan31 +1mo -> Feb end (non-leap)
+  PASS deadline Jan31 +1mo -> Feb29 (leap 2028)
+  PASS deadline 2026-10-30 +9mo -> 2027-07-30
+  PASS remainingDays inclusive both ends
+  PASS remainingDays same day = 1
+  PASS simulate: following suggestion finishes by deadline
+  PASS simulate: suggestion always within remaining (integer by type)
+  PASS simulate: last-day rule (suggestion == all remaining) or finished early
+  PASS last day: suggestion == all remaining (3)
+  PASS zhang: K>=1 and N==5
+  PASS zhang: target == K*N and >= rounded suggestion
+  PASS zhang: K=ceil(rounded/N), target>=rounded
+  PASS zhang daodejing: N==2, target=K*2
+  PASS deadline change re-derives suggestion (near > far)
+  PASS whole suggestion integer bounds
+  PASS pace FAST branch
+  PASS pace ON_TRACK branch
+  PASS pace SLOW branch + lateDays>0
+  PASS pace no-data: ON_TRACK and predicted == deadline
+  PASS stage completes -> next starts next day
+  PASS window: next stage excludes completion-day counts
+  PASS current stage advanced
+  PASS early start: prev window closed, done kept
+  PASS early start: current = next stage
+  PASS early start: next done counts from today
+  PASS total progress folded 50%
+  PASS chapter: normal pass counts 1
+  PASS chapter: seek near end then finish does NOT count
+  PASS chapter: whole-book pass counts 2 chapters
+  PASS chapter: single-chapter loop two rounds counts 2
+  PASS chapter: flush at track end counts armed chapter
+  PASS boundary: chapter play + chapter scope + loop -> WRAP
+  PASS boundary: chapter play + book scope -> STOP
+  PASS boundary: chapter play + loop off -> STOP
+  PASS boundary: whole play + chapter scope + loop -> WRAP
+  PASS boundary: whole play + book scope -> CONTINUE
+  PASS boundary: whole play + loop off -> CONTINUE (scope inert)
+PlanHarness: 37 passed, 0 failed

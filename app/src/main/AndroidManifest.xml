@@ -61,6 +61,14 @@
             android:name=".ReaderActivity"
             android:exported="false" />
 
+        <!-- v1.21.0 阅读计划：章列表页与计划编辑/确认/设置页 -->
+        <activity
+            android:name=".ChapterListActivity"
+            android:exported="false" />
+        <activity
+            android:name=".PlanEditActivity"
+            android:exported="false" />
+
         <activity
             android:name=".HelpActivity"
             android:exported="false" />

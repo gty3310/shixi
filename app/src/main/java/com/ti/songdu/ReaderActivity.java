@@ -80,6 +80,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private WebView web;
     private View topBar, bottomBar;
     private TextView btnRToggle, btnRSpeed, btnRLoop, btnRScript, btnRPinyin, btnROrient, btnFollow;
+    /** v1.21.0 循环范围钮（整书/单章）：reader_prefs/loopScope，与章卡片、PlayerService 同源 */
+    private TextView btnRLoopScope;
     private TextView btnRFollow, btnRFont;
     /** v1.16.0 识读：开关钮、会话、数据（懒构建）与待启动标记（等权限/模型时置位） */
     private TextView btnRRecite;
@@ -191,6 +193,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRToggle = findViewById(R.id.btnRToggle);
         btnRSpeed = findViewById(R.id.btnRSpeed);
         btnRLoop = findViewById(R.id.btnRLoop);
+        btnRLoopScope = findViewById(R.id.btnRLoopScope);
         btnRFollow = findViewById(R.id.btnRFollow);
         btnRFollowChars = findViewById(R.id.btnRFollowChars);
         btnRRecite = findViewById(R.id.btnRRecite);
@@ -256,6 +259,13 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             prefs.edit().putBoolean("loop", loopOn).apply();
             applyLoop();
             refreshBarLabels();
+        });
+        btnRLoopScope.setOnClickListener(v -> {
+            boolean nowChapter = !"chapter".equals(prefs.getString("loopScope", "book"));
+            prefs.edit().putString("loopScope", nowChapter ? "chapter" : "book").apply();
+            if (PlayerService.instance != null) PlayerService.instance.setLoopScope(nowChapter);
+            refreshBarLabels();
+            Toast.makeText(this, nowChapter ? "单章循环" : "整书循环", Toast.LENGTH_SHORT).show();
         });
         btnRFollow.setOnClickListener(v -> {
             // 跟读开关的真源在 PlayerService（follow_prefs 持久化）；
@@ -944,6 +954,12 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     private void refreshBarLabels() {
         btnRLoop.setText(loopOn ? "循环 开" : "循环 关");
+        if (btnRLoopScope != null) {
+            boolean scopeChapter = PlayerService.instance != null
+                    ? PlayerService.instance.loopScopeChapter
+                    : "chapter".equals(prefs.getString("loopScope", "book"));
+            btnRLoopScope.setText(scopeChapter ? "单章循环" : "整书循环");
+        }
         btnRScript.setText(useTrad ? "简体" : "繁體"); // 钮上显示「点一下切到」的字形
         btnRPinyin.setText(pinyinOn ? "注音 开" : "注音 关");
         btnROrient.setText(vertical ? "横排" : "竖排");
@@ -1097,6 +1113,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                     });
         }
         reciteOn = true;
+        // v1.21.0：识读是用户领读、不是自然整段播放——会话期间暂停章监测，不触发章计数
+        if (PlayerService.instance != null) PlayerService.instance.chapterSuspended = true;
         reciteSession.start(curSentence >= 0 ? curSentence : 0);
         refreshReciteButton();
         Toast.makeText(this, "识读已开启：你领读，我跟着听", Toast.LENGTH_SHORT).show();
@@ -1104,6 +1122,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     private void stopRecite() {
         reciteOn = false;
+        if (PlayerService.instance != null) PlayerService.instance.chapterSuspended = false;
         if (reciteSession != null) reciteSession.stop();
         refreshReciteButton();
     }
@@ -1383,6 +1402,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         // 识读会话持有麦克风与识别器，页面销毁必须停干净
         if (reciteSession != null) {
             reciteOn = false;
+            if (PlayerService.instance != null) PlayerService.instance.chapterSuspended = false;
             reciteSession.stop();
             reciteSession = null;
         }

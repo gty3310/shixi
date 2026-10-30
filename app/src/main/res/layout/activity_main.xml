@@ -107,6 +107,15 @@
                     android:textSize="11sp" />
             </LinearLayout>
 
+            <!-- v1.21.0 首页今日进度带（候选 A）：仅有进行中计划时由 MainActivity 填充渲染 -->
+            <LinearLayout
+                android:id="@+id/todayPlanBand"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
             <!-- v1.4.2：顶部红色三数统计条已按用户要求删除（只是不显示，统计照常计算） -->
 
             <FrameLayout
@@ -138,9 +147,10 @@
             </FrameLayout>
         </LinearLayout>
 
-        <!-- 日历页 -->
+        <!-- v1.21.0 阅读计划页：上半计划区（planContainer 由 MainActivity 填充），
+             下半「诵读日历」＝原历史记录整块迁入（月历 + 日明细，口径不改） -->
         <ScrollView
-            android:id="@+id/pageCalendar"
+            android:id="@+id/pagePlan"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:visibility="gone">
@@ -152,9 +162,25 @@
                 android:paddingTop="8dp"
                 android:paddingBottom="16dp">
 
+                <LinearLayout
+                    android:id="@+id/planContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="22dp"
+                    android:text="诵读日历"
+                    android:textColor="@color/ink"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
                     android:text="点开某一天，看每个音频听了几遍"
                     android:textColor="@color/muted"
                     android:textSize="13sp" />
@@ -370,7 +396,7 @@
             android:orientation="horizontal" />
     </LinearLayout>
 
-    <!-- 底部三栏（v1.16.0 定稿）：听 / 历史记录 / 复习 -->
+    <!-- 底部三栏（v1.21.0 定案）：听读 / 复习 / 阅读计划 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="52dp"
@@ -382,16 +408,7 @@
             android:layout_height="match_parent"
             android:layout_weight="1"
             android:background="#00000000"
-            android:text="听"
-            android:textSize="15sp" />
-
-        <Button
-            android:id="@+id/navCal"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="#00000000"
-            android:text="历史记录"
+            android:text="听读"
             android:textSize="15sp" />
 
         <Button
@@ -401,6 +418,15 @@
             android:layout_weight="1"
             android:background="#00000000"
             android:text="复习"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/navPlan"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="#00000000"
+            android:text="阅读计划"
             android:textSize="15sp" />
     </LinearLayout>
 </LinearLayout>

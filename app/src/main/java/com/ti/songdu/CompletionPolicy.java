@@ -32,5 +32,33 @@ public final class CompletionPolicy {
         return Action.STOP;
     }
 
+    // ---------- v1.21.0 章界去向（循环范围口径） ----------
+
+    public enum ChapterAction {
+        /** 到达章末：计数后回本章章首续播（单章循环） */
+        WRAP_CHAPTER,
+        /** 章级播放且范围为整书：计数后停在本章章尾，不接整本 */
+        STOP_CHAPTER,
+        /** 普通整本播放：计数后照常继续向后播 */
+        CONTINUE
+    }
+
+    /**
+     * 自然播到当前章末（章计数已由调用方完成）后的去向：
+     *  - 章级播放：范围=单章且循环开 -> 回绕；范围=整书 -> 停在章尾
+     *  - 整本播放：范围=单章且循环开 -> 回绕本章；否则继续向后
+     *  - 循环关时范围不生效（章级播放仍按其定义停在章尾）
+     */
+    public static ChapterAction chapterBoundary(boolean loopEnabled,
+                                                boolean loopScopeChapter,
+                                                boolean chapterPlayback) {
+        if (chapterPlayback) {
+            return (loopEnabled && loopScopeChapter)
+                    ? ChapterAction.WRAP_CHAPTER : ChapterAction.STOP_CHAPTER;
+        }
+        if (loopEnabled && loopScopeChapter) return ChapterAction.WRAP_CHAPTER;
+        return ChapterAction.CONTINUE;
+    }
+
     private CompletionPolicy() {}
 }

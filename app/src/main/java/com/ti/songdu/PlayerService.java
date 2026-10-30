@@ -77,6 +77,12 @@ public class PlayerService extends Service {
     public static final String ACTION_PREV = "com.ti.songdu.PREV";
     public static final String ACTION_NEXT = "com.ti.songdu.NEXT";
     public static final String ACTION_PLAY_TRACK_AT = "com.ti.songdu.PLAY_TRACK_AT";
+    /** v1.21.0 章级播放：从某章章首播到章尾（去向由 CompletionPolicy.chapterBoundary 定） */
+    public static final String ACTION_PLAY_CHAPTER = "com.ti.songdu.PLAY_CHAPTER";
+    public static final String EXTRA_CH_BOOK = "ch_book";
+    public static final String EXTRA_CH_INDEX = "ch_index";
+    public static final String EXTRA_CH_START = "ch_start";
+    public static final String EXTRA_CH_END = "ch_end";
     public static final String ACTION_SEEK_TO = "com.ti.songdu.SEEK_TO";
     public static final String ACTION_SEEK_REL = "com.ti.songdu.SEEK_REL";
     /** v1.10.0：仅要求服务把悬浮播放控件拉起来（MainActivity 打开/授权回来时发），不带播放语义 */
@@ -123,6 +129,193 @@ public class PlayerService extends Service {
     /** v1.14.1：单曲循环开关的持久化口径（与 ReaderActivity 的 prefs/loop 同一份） */
     private static final String LOOP_PREFS = "reader_prefs";
     private static final String KEY_LOOP_SINGLE = "loop";
+
+    // ---------- v1.21.0 章级计数与循环范围 ----------
+    /** 循环范围：false=整书（默认） / true=单章；持久化 reader_prefs/loopScope(book|chapter) */
+    public boolean loopScopeChapter = false;
+    private static final String KEY_LOOP_SCOPE = "loopScope";
+    /** 识读会话期间置真：章监测暂停（识读是用户领读、不是自然整段播放，不触发章计数）。
+     *  由 ReaderActivity 在识读开始/停止时设置；跟读则直接看 followEnabled */
+    public boolean chapterSuspended = false;
+    private final ChapterProgressTracker chapterTracker = new ChapterProgressTracker();
+    private String chapterBookId = null;
+    /** 当前曲目内容包章界（音频轴、已按 scale 缩放）与全局章序号偏移（论语单篇曲目 = 篇序） */
+    private long[] chStarts = new long[0];
+    private long[] chEnds = new long[0];
+    private int chGlobalOffset = 0;
+    private String chTrackId = null;
+    /** 章级播放态：正在播的章（全局序号）与章界（音频轴）；chapterPlayback=true 时生效 */
+    public boolean chapterPlayback = false;
+    private String cpBookId = null;
+    private int cpChapterGlobal = -1;
+    private int cpChapterLocal = -1;
+    private long cpStartMs = 0;
+    private long cpEndMs = 0;
+    /** playChapter 经 playTrackAt/playTrack 装载路径时保住章级播放态的一次性标记 */
+    private boolean cpSetupArmed = false;
+    private boolean chapterLoopPosted = false;
+    private final Runnable chapterTick = new Runnable() {
+        @Override
+        public void run() {
+            chapterStep();
+            if (chapterLoopPosted) handler.postDelayed(this, 250);
+        }
+    };
+
+    private void startChapterLoop() {
+        if (chapterLoopPosted) return;
+        chapterLoopPosted = true;
+        handler.post(chapterTick);
+    }
+
+    private void stopChapterLoop() {
+        chapterLoopPosted = false;
+        handler.removeCallbacks(chapterTick);
+    }
+
+    public void setLoopScope(boolean chapter) {
+        loopScopeChapter = chapter;
+        getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .edit().putString(KEY_LOOP_SCOPE, chapter ? "chapter" : "book").apply();
+    }
+
+    public boolean isLoopScopeChapter() {
+        if (instance == this) return loopScopeChapter;
+        return loopScopeChapter;
+    }
+
+    /** 为当前曲目重建章界表（装载完成/切歌后调用）；无内容包则清空、监测自动不生效 */
+    private void setupChapterMonitor() {
+        chStarts = new long[0]; chEnds = new long[0];
+        chapterBookId = null; chTrackId = null; chGlobalOffset = 0;
+        chapterTracker.setChapters(chStarts, chEnds);
+        if (current == null) return;
+        try {
+            ContentRepo.Book b = ContentRepo.bookForVoice(this, current, activeVoice);
+            if (b == null) b = ContentRepo.bookForTrack(this, current);
+            if (b == null || b.chapters.isEmpty()) return;
+            String bid = PlanBooks.bookIdOfTrackFull(current);
+            if (bid == null) bid = b.bookId;
+            if (bid == null) return;
+            double scale = ContentRepo.scaleFor(current, b);
+            java.util.List<Long> ss = new java.util.ArrayList<>();
+            java.util.List<Long> ee = new java.util.ArrayList<>();
+            for (ContentRepo.Chapter ch : b.chapters) {
+                long st = -1, en = -1;
+                for (ContentRepo.Sentence s : ch.sentences) {
+                    if (s.noAudio || s.startMs < 0) continue;
+                    if (st < 0) st = s.startMs;
+                    if (s.endMs > en) en = s.endMs;
+                }
+                if (st < 0 || en <= st) continue;
+                ss.add(Math.round(st * scale));
+                ee.add(Math.round(en * scale));
+            }
+            if (ee.isEmpty()) return;
+            chStarts = new long[ss.size()];
+            chEnds = new long[ee.size()];
+            for (int i = 0; i < ss.size(); i++) { chStarts[i] = ss.get(i); chEnds[i] = ee.get(i); }
+            chapterBookId = bid;
+            chTrackId = current.id;
+            int lunyuIdx = ContentRepo.lunyuChapterIndex(current);
+            chGlobalOffset = (b.chapters.size() == 1 && lunyuIdx > 0) ? lunyuIdx : 0;
+            chapterTracker.setChapters(chStarts, chEnds);
+            if (chapterPlayback && cpBookId != null && cpBookId.equals(bid)) {
+                // 章级播放装载完成：本地章下标按全局序号换算
+                cpChapterLocal = cpChapterGlobal - chGlobalOffset;
+            }
+        } catch (Exception ignored) {
+            chStarts = new long[0]; chEnds = new long[0]; chapterBookId = null;
+        }
+    }
+
+    private void countChapter(int localIdx) {
+        if (chapterBookId == null || localIdx < 0) return;
+        ChapterStatsStore.get(this).addAuto(
+                chapterBookId, chGlobalOffset + localIdx, java.time.LocalDate.now(), 1);
+        if (listener != null) listener.onCountChanged();
+    }
+
+    /** 章监测一拍（250ms）：跟读/识读会话、重播重建、未播放时不判定 */
+    private void chapterStep() {
+        if (mp == null || !prepared || !playing || preparing || restarting) return;
+        if (followEnabled || chapterSuspended) return;
+        if (current == null || chEnds.length == 0 || chapterBookId == null) return;
+        if (!current.id.equals(chTrackId)) { setupChapterMonitor(); if (chEnds.length == 0) return; }
+        long pos;
+        try { pos = mp.getCurrentPosition(); } catch (Exception e) { return; }
+        java.util.List<Integer> counted = chapterTracker.feed(pos, true);
+        for (int localIdx : counted) {
+            countChapter(localIdx);
+            CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
+                    loopEnabled, loopScopeChapter, chapterPlayback);
+            boolean isCpChapter = chapterPlayback && localIdx == cpChapterLocal;
+            if (chapterPlayback && !isCpChapter && !loopScopeChapter) {
+                // 章级播放但已越过目标章（装载错位兜底）：按目标章尾处理
+                isCpChapter = localIdx > cpChapterLocal;
+            }
+            if (isCpChapter) {
+                if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                    wrapToChapterStart(localIdx);
+                } else {
+                    stopAtChapterEnd();
+                }
+                return;
+            }
+            if (!chapterPlayback && act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                wrapToChapterStart(localIdx);
+                return;
+            }
+        }
+    }
+
+    private void wrapToChapterStart(int localIdx) {
+        if (localIdx < 0 || localIdx >= chStarts.length || mp == null) return;
+        long start = chStarts[localIdx];
+        try {
+            mp.seekTo((int) start, MediaPlayer.SEEK_CLOSEST_SYNC);
+        } catch (Exception ignored) {
+        }
+        if (current != null) current.positionMs = start;
+        chapterTracker.resetToChapter(localIdx, start);
+        updateNotification();
+        notifyState();
+    }
+
+    private void stopAtChapterEnd() {
+        if (mp != null) {
+            try { mp.pause(); } catch (Exception ignored) {
+            }
+        }
+        playing = false;
+        if (current != null && cpEndMs > 0) current.positionMs = cpEndMs;
+        chapterPlayback = false;
+        saveCurrentPosition();
+        updateNotification();
+        notifyState();
+    }
+
+    /** 章级播放入口：从章首播本章；去向（回绕/停）由 chapterBoundary 在章尾判定 */
+    public void playChapter(Track t, String bookId, int chapterGlobal, long startMs, long endMs) {
+        if (t == null) return;
+        cpBookId = bookId;
+        cpChapterGlobal = chapterGlobal;
+        cpStartMs = startMs;
+        cpEndMs = endMs;
+        chapterPlayback = true;
+        if (current != null && current.id.equals(t.id) && prepared && mp != null) {
+            cpChapterLocal = chapterGlobal - chGlobalOffset;
+            chapterTracker.resetToChapter(Math.max(0, cpChapterLocal), startMs);
+            seekToPosition(startMs);
+            if (!playing) resume();
+            updateNotification();
+            notifyState();
+            return;
+        }
+        cpSetupArmed = true;
+        playTrackAt(t, startMs);
+    }
+
     /** v1.4 点句播放的待执行 seek：playTrackAt 在 prepare 完成前先记下，onPrepared 时消费；
      *  带 trackId 校验，防止中途切歌后把旧位置 seek 到新曲目上 */
     private long pendingSeekMs = -1;
@@ -757,7 +950,10 @@ public class PlayerService extends Service {
         // v1.14.1：恢复单曲循环开关（默认开＝v1.4 以来的现行行为）
         loopEnabled = getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
                 .getBoolean(KEY_LOOP_SINGLE, true);
+        loopScopeChapter = "chapter".equals(getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .getString(KEY_LOOP_SCOPE, "book"));
         if (followEnabled) startFollowLoop();
+        startChapterLoop();
         createChannel();
         initSession();
         // 先进入前台，避免 startForegroundService 超时被杀
@@ -951,6 +1147,11 @@ public class PlayerService extends Service {
             }
             pendingSeekMs = -1;
             pendingSeekTrackId = null;
+            setupChapterMonitor(); // v1.21.0：新装载按本曲目重建章界表
+            if (chapterPlayback && cpSetupArmed) {
+                cpSetupArmed = false;
+                chapterTracker.resetToChapter(Math.max(0, cpChapterLocal), current != null ? current.positionMs : 0);
+            }
             if (holdAfterPrepare) {
                 // v1.17.0：切声前是暂停态——装载就位但不开播，位置停在映射后的句首
                 holdAfterPrepare = false;
@@ -976,6 +1177,36 @@ public class PlayerService extends Service {
             }
             if (followEnabled && followPhase != FOLLOW_IDLE) {
                 finishFollowPass();
+                return;
+            }
+            // v1.21.0：整轨自然播完先补章账（末章在 onCompletion 前未被位置采样越界时兜底；
+            // 跟读路径已在上方return、识读不经播放器，故不会误入此账）
+            if (!chapterSuspended && chEnds.length > 0 && chapterBookId != null
+                    && current != null && current.id.equals(chTrackId)) {
+                int flushed = chapterTracker.flushAtTrackEnd();
+                if (flushed >= 0) countChapter(flushed);
+            }
+            // v1.21.0：章级播放的整轨即一章（论语篇轨）：计数已在上方完成，
+            // 去向按章界口径——单章范围+循环开回绕、整书范围停在章尾，不接整本
+            if (chapterPlayback) {
+                CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
+                        loopEnabled, loopScopeChapter, true);
+                if (current != null) {
+                    store.increment(current, LocalDate.now());
+                    current.positionMs = 0;
+                    store.saveTracks();
+                    if (listener != null) listener.onCountChanged();
+                }
+                if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                    chapterPlayback = true; // replayFromStart 内部 playTrack 会按标记保住章态
+                    cpSetupArmed = true;
+                    replayFromStart();
+                } else {
+                    playing = false;
+                    chapterPlayback = false;
+                }
+                updateNotification();
+                notifyState();
                 return;
             }
             // 一遍完整播完：先计数落盘、位置清零，再走全量重建路径重播（单曲循环）。
@@ -1147,6 +1378,7 @@ public class PlayerService extends Service {
 
     public void playTrack(Track t) {
         if (t == null) return;
+        if (!cpSetupArmed) chapterPlayback = false; // v1.21.0：普通播放退出章级播放态
         replayRetryUsed = false; // v1.20.7：新装载起，播完重播的兜底次数重新计
         // v1.17.0 首播选声门：双声音书尚未选过 → 任何入口都先拉选声页，
         // 选定后由选声页重新发起播放，本次不装载、不出声（不许绕过）
@@ -1208,6 +1440,7 @@ public class PlayerService extends Service {
         }
         if (current != null && current.id.equals(t.id) && prepared) {
             if (mp != null) {
+                if (!cpSetupArmed) chapterPlayback = false; // v1.21.0 点句起读退出章级播放态
                 seekToPosition(posMs);
                 if (!playing) {
                     requestFocus();
@@ -1528,6 +1761,16 @@ public class PlayerService extends Service {
                     if (t != null) playTrack(t);
                     break;
                 }
+                case ACTION_PLAY_CHAPTER: {
+                    String id = intent.getStringExtra(EXTRA_TRACK_ID);
+                    Track t = store.findTrack(id);
+                    if (t != null) playChapter(t,
+                            intent.getStringExtra(EXTRA_CH_BOOK),
+                            intent.getIntExtra(EXTRA_CH_INDEX, 0),
+                            intent.getLongExtra(EXTRA_CH_START, 0),
+                            intent.getLongExtra(EXTRA_CH_END, 0));
+                    break;
+                }
                 case ACTION_PLAY_TRACK_AT: {
                     String id = intent.getStringExtra(EXTRA_TRACK_ID);
                     Track t = store.findTrack(id);
@@ -1583,6 +1826,7 @@ public class PlayerService extends Service {
         }
         handler.removeCallbacks(ticker);
         stopFollowLoop();
+        stopChapterLoop();
         abandonFocus();
         saveCurrentPosition();
         if (mp != null) {
