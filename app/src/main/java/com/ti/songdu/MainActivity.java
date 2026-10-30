@@ -1871,9 +1871,15 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         } else if (st.isZhang()) {
             planContainer.addView(planTextLp("《" + st.bookTitle + "》 建议 读 " + res.todayK + " "
                     + st.unitName + " · 每" + st.unitName + " " + res.todayN + " 遍", 16, R.color.ink, false, 6));
-            planContainer.addView(planTextLp("已记 " + done + " " + st.unitName + "·遍"
-                    + (target > done ? " · 还差 " + (target - done) + " " + st.unitName + "·遍" : ""),
-                    13.5f, R.color.muted, false, 2));
+            String zhangLine = "已记 " + done + " " + st.unitName + "·遍"
+                    + (target > done ? " · 还差 " + (target - done) + " " + st.unitName + "·遍" : "");
+            long passMsZ = PlanBooks.bookPassDurationMs(store, st.bookId);
+            if (target > done && passMsZ > 0 && st.totalUnits > 0 && store.speed > 0) {
+                long mins = Math.round((double) passMsZ / st.totalUnits * (target - done)
+                        / 60000.0 / store.speed);
+                zhangLine += " · 约 " + Math.max(1, mins) + " 分钟";
+            }
+            planContainer.addView(planTextLp(zhangLine, 13.5f, R.color.muted, false, 2));
         } else {
             planContainer.addView(planTextLp("《" + st.bookTitle + "》 建议 " + target + " 遍 · 已读 "
                     + done + " 遍", 16, R.color.ink, false, 6));
