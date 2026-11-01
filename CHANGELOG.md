@@ -5,7 +5,7 @@
 
 ## [1.23.0] - 2026-11-01
 
-发布提交：b2368be · 对比：https://github.com/gty3310/shixi/compare/v1.22.0...v1.23.0 · 标签 v1.23.0
+发布提交：1a218c3 · 对比：https://github.com/gty3310/shixi/compare/v1.22.0...v1.23.0 · 标签 v1.23.0
 
 ### 新增
 - 复习页双页签：顶部原生分段切换「笔记 / 待熟」（样式与设置页状态钮同口径：朱砂实心白字＝选中、透明描边灰字＝未选）；上次页签持久化（ui_prefs/review_tab_weak），下次进复习页落回该页签；唯一覆盖入口＝识读流程结束——ReaderActivity.stopRecite 写 ui_prefs/force_review_weak_once 标记，MainActivity.onResume 消费后强制落「待熟」一次（另有 EXTRA_OPEN_REVIEW_WEAK intent 入口），不覆盖持久化记忆
@@ -18,7 +18,7 @@
 
 ### 验收
 - 桌面 harness：PlanHarness 43 项全过（原 37 项不回退＋新增 6 项：601 现场复刻→中性档且预计＝截止日、逐日照建议读预计不晚于截止日、两倍速度预计提前、极慢时护栏 lateDays≤remainingDays、道德经基准量 52、剩余天数/总进度现场值），NotesHarness 6 项全过（跨书分组、六书序、组内 flat 句序、空/空白笔记过滤、mark-only 排除、空/ null 输入），输出留档 tools/plan_harness/harness_output_v1230.txt 与 tools/notes_harness/harness_output_v1230.txt
-- aapt2 badging 实测 versionCode 47 / versionName 1.23.0，包内含识读原生库（libsherpa-onnx-jni.so、libonnxruntime.so），无残缺警告；BuildInfo 构建短号＝发布提交 b2368be；APK size 36524761、sha256 d9ec536c542f2d78940fdf7ac6370b5f932e48038a1cb0b419fa3af291082cb4、md5 08b57f77a3e46580be12ddba0dc4a2e5
+- aapt2 badging 实测 versionCode 47 / versionName 1.23.0，包内含识读原生库（libsherpa-onnx-jni.so、libonnxruntime.so），无残缺警告；BuildInfo 构建短号＝发布提交 1a218c3；APK size 36524761、sha256 dac1d0462bd0daacc6996d7cb7e0754749d8b12791f5ac7fd159337471266b7b、md5 2eeef6f2677b18e3e6428f3ab3f3b9de
 - 代码走查：阶段行点击分发（未下载→弹层 / 已下载→章卡片 / 已完成→无点击）、弹层三条入账路径均写 manualEntries 且返回计划页细账即变、笔记条目点击与识读复习条目共用 jumpToSentence、页签强制标记只消费一次
 - 真机未验：页签切换观感、笔记跳转落点精度、手动记录弹层操作手感、应用内更新从 v1.22.0 升到本版的实际链路，待用户实测
 
