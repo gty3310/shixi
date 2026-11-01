@@ -16,7 +16,7 @@
 
 ### 验收
 - 桌面 harness（tools/update_harness）直驱 UpdateLogic 本体 39 项断言全过：版本比较三态、忽略名单命中/未命中/手动检查不受忽略影响、主源失败→兜底判定（含取消与 Wi-Fi 限制不回退）、清单字段缺失容错（缺 notes/缺单侧源可忍、缺 versionCode/无源判无效）、分片清单按序解析、sha256 已知向量与校验四结论（OK/大小不符/sha 不符/清单缺 sha 判失败）、24 小时节流四分支（harness_output_v1220.txt 留档）
-- 发布后回读核对：Gitee 与 GitHub 两边 release 附件 size/sha256 与本地构建一致、两边 latest API 无令牌可取回 update.json 并解析出 versionCode 46（详见发版记录）
+- 发布后回读核对：GitHub 侧无令牌全程实测（latest API → 取回 update.json 解析出 versionCode 46 → 整件 APK 下载回读 size 与 sha256 与本地构建逐字一致）；Gitee 侧附件经令牌 API 回读 size 一致。已知限制（2026-11-01 发版当日查实）：Gitee 发行仓 xiange-releases 建仓时公开参数未生效、现为私有仓，且 Gitee 以「帐号安全评级较低」拒绝改公开（要求帐号先完成 2FA 或绑定可靠第三方帐号，属帐号本人操作）——在此之前 App 的 Gitee 源取不到清单，会自动走 GitHub 兜底源（功能不受影响）；帐号处理完把该仓设为公开后，无需改 App 即恢复 Gitee 优先
 - 真机未验：冷启动自检弹窗实际触发、真实下载全程、调起系统安装与覆盖安装、忽略此版本与 Wi-Fi 开关的实际行为，待用户装 v1.22.0 后验（自 v1.22.0 起的下一版即可用应用内更新自验）
 
 ## [1.21.0] - 2026-10-30
