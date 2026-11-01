@@ -2006,7 +2006,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         final int sugg = stageIdx == res.currentStage
                 ? res.todaySuggestionUnits
                 : PlanEngine.stageDailySuggestion(st, done, shareSum, res.remainingDays);
-        final int suggRemaining = Math.max(0, sugg - (stageIdx == res.currentStage ? res.todayDone : 0));
+        // 整额入账（与 v1.21.0 今日块旧钮同口径）：点一次记满今日建议量，不做差额补足
+        final boolean suggDone = sugg <= 0
+                || (stageIdx == res.currentStage && res.todayDone >= sugg);
 
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
@@ -2030,13 +2032,13 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         dblp.topMargin = dp(10);
         doneBtn.setLayoutParams(dblp);
-        if (suggRemaining <= 0) {
+        if (suggDone) {
             doneBtn.setText("今日建议已记完");
             doneBtn.setTextColor(getColor(R.color.muted));
         } else {
             doneBtn.setOnClickListener(v -> {
-                ps.addManualOn(stageIdx, suggRemaining, today);
-                Toast.makeText(this, "已记 " + suggRemaining + " " + unitLabel, Toast.LENGTH_SHORT).show();
+                ps.addManualOn(stageIdx, sugg, today);
+                Toast.makeText(this, "已记 " + sugg + " " + unitLabel, Toast.LENGTH_SHORT).show();
                 if (dlg[0] != null) dlg[0].dismiss();
                 buildPlanPage();
                 buildPlanBand();
