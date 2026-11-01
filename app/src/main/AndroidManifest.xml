@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- v1.16.0 识读：麦克风采集（端侧识别，不联网上传音频） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- v1.22.0 应用内更新：调起系统安装器装下载好的更新包（装更新时还需用户
+         在系统页一次性允许「安装未知应用」） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -72,6 +75,13 @@
         <activity
             android:name=".HelpActivity"
             android:exported="false" />
+
+        <!-- v1.22.0 更新包文件共享（框架 ContentProvider，见 UpdateFileProvider） -->
+        <provider
+            android:name=".UpdateFileProvider"
+            android:authorities="com.ti.songdu.updatefileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <service
             android:name=".PlayerService"

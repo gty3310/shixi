@@ -384,6 +384,29 @@ public class SettingsActivity extends Activity {
 
         addDivider(root);
 
+        // ---------- 应用更新组（v1.22.0） ----------
+        addGroupTitle(root, "应用更新");
+        LinearLayout rowCheck = rowLine();
+        TextView labCheck = rowLabel("检查更新");
+        labCheck.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        rowCheck.addView(labCheck);
+        TextView checkVal = new TextView(this);
+        checkVal.setText("v" + BuildInfo.VERSION_NAME + " · " + BuildInfo.GIT_SHORT + " · 检查 ›");
+        checkVal.setTextSize(14);
+        checkVal.setTextColor(getColor(R.color.accent));
+        rowCheck.addView(checkVal);
+        rowCheck.setOnClickListener(v -> AppUpdater.manualCheck(this));
+        root.addView(rowCheck);
+        addSegRow(root, "仅 Wi-Fi 下载更新", new String[]{"开", "关"},
+                AppUpdater.isWifiOnly(this) ? 0 : 1,
+                idx -> AppUpdater.setWifiOnly(this, idx == 0));
+        addSegRow(root, "自动检查更新", new String[]{"开", "关"},
+                AppUpdater.isAutoCheck(this) ? 0 : 1,
+                idx -> AppUpdater.setAutoCheck(this, idx == 0));
+
+        addDivider(root);
+
         // ---------- 关于组（v1.18.0：更新日志常驻入口＋版本显示） ----------
         addGroupTitle(root, "关于");
         LinearLayout rowVer = rowLine();

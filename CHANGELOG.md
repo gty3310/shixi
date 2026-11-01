@@ -3,6 +3,22 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.22.0] - 2026-11-01
+
+发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.21.0...v1.22.0 · 标签 v1.22.0
+
+### 新增
+- 应用内更新（本版是最后一次需要去 Drive 手动装的版本）：冷启动节流自检（距上次检查满 24 小时才查、失败静默不打扰）＋设置页「应用更新」组手动「检查更新」（失败明示原因）；查到新版弹更新框（新版本号＋更新说明＋「更新／以后再说／忽略此版本」，忽略后该 versionCode 不再自动弹、手动检查仍能查到）
+- 下载与安装：点「更新」同框转下载进度（百分比＋可取消）；下载源优先 Gitee 发行仓（公开仓 xiange-releases，只放 release 不放源码）、失败自动换 GitHub 本仓 Releases 兜底再试一次；下完先验 size 与 sha256，不符删文件并明示失败原因；验过后经框架 ContentProvider（工程零第三方依赖、无 androidx，故不用 androidx FileProvider 类，改用自有 UpdateFileProvider 实现等价的 content:// 临时授权共享）＋ ACTION_VIEW 调起系统安装；无「安装未知应用」授权时先弹引导去系统页一次性开启（新增权限 REQUEST_INSTALL_PACKAGES，仅此一条）
+- 设置项（「应用更新」组）：「检查更新」行（带当前版本＋构建短号，沿用 BuildInfo）、「仅 Wi-Fi 下载更新」开关（默认关＝移动流量也可下载）、「自动检查更新」开关（默认开）
+- 双源发行通道：update.json 清单（versionCode/versionName/apkFileName/size/sha256/notes/sources）随版同挂 Gitee 与 GitHub 两边 release；App 取数顺序先 Gitee latest release API、失败换 GitHub latest release API。通道形态实测：Gitee 发行附件单文件上限 100 MB（官方口径，连接器文档 2026-10-24 读数），本版 APK 整件小于上限 → 直挂整件、不分片；清单与 App 均保留分片形态支持（sources 某侧可为 parts 数组按序拼合）
+- 纯逻辑类 UpdateLogic（无 Android 依赖）：清单解析、版本比较、忽略名单判定、双源回退判定、节流判定、size/sha256 校验判定，App 与桌面 harness 共用同一份源码；更新流程只读写 update_prefs 与 cacheDir/updates/，不碰 plan.json/records/tracks/chapter_stats 等任何用户数据
+
+### 验收
+- 桌面 harness（tools/update_harness）直驱 UpdateLogic 本体 39 项断言全过：版本比较三态、忽略名单命中/未命中/手动检查不受忽略影响、主源失败→兜底判定（含取消与 Wi-Fi 限制不回退）、清单字段缺失容错（缺 notes/缺单侧源可忍、缺 versionCode/无源判无效）、分片清单按序解析、sha256 已知向量与校验四结论（OK/大小不符/sha 不符/清单缺 sha 判失败）、24 小时节流四分支（harness_output_v1220.txt 留档）
+- 发布后回读核对：Gitee 与 GitHub 两边 release 附件 size/sha256 与本地构建一致、两边 latest API 无令牌可取回 update.json 并解析出 versionCode 46（详见发版记录）
+- 真机未验：冷启动自检弹窗实际触发、真实下载全程、调起系统安装与覆盖安装、忽略此版本与 Wi-Fi 开关的实际行为，待用户装 v1.22.0 后验（自 v1.22.0 起的下一版即可用应用内更新自验）
+
 ## [1.21.0] - 2026-10-30
 
 发布提交：547ca91 · 对比：https://github.com/gty3310/shixi/compare/v1.20.7...v1.21.0 · 标签 v1.21.0

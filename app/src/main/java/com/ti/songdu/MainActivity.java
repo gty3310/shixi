@@ -163,6 +163,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
         // v1.14.0：「添加书籍」改开书库页（线上目录下载＋自传入口）；本地导入弹窗由书库页回调用
         WhatsNew.maybeShowOnLaunch(this); // v1.18.0 新版首次打开弹更新日志
+        AppUpdater.maybeAutoCheck(this); // v1.22.0 应用内更新自检（24h 节流、失败静默）
 
         findViewById(R.id.btnAdd).setOnClickListener(
                 v -> startActivity(new Intent(this, BookstoreActivity.class)));
