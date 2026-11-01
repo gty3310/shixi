@@ -47,4 +47,4 @@ Shixi is an AI reader built for mastering classical texts through recitation, st
 
 ## 版本 Version
 
-当前版本 v1.23.0。v1.23.0：复习页分「笔记 / 待熟」双页签——笔记按书汇集、点一条跳回原句，待熟仍是原四档内容，识读结束自动落待熟；修好阅读计划预计完成日的错数（计划头几天不再乱报晚几百天）；还没下载的书在计划页点阶段行就能打开手动记录（今日已按建议读完 / 记一笔 / 最近记录）。上一版 v1.22.0 的应用内更新等功能全部保留：更新走双源，Gitee 发行仓 xiange-releases 优先、GitHub Releases 兜底，清单 update.json 同挂两边。本项目以 CC BY-NC-SA 4.0 许可共享（见仓库根目录 LICENSE）。
+当前版本 v1.24.0。v1.24.0：应用内更新改「自动下载、点一次安装」——设置新增「自动下载更新」开关（默认开），查到新版后自动在后台下载好，备好后前台弹「新版已备好」或发通知「点此安装」，点一次即装；开了仅 Wi-Fi 又不在 Wi-Fi 下、或关掉自动下载时，退回弹框点了才下的旧流程。上一版 v1.23.0 的复习页双页签等功能全部保留：更新走双源，Gitee 发行仓 xiange-releases 优先、GitHub Releases 兜底，清单 update.json 同挂两边。本项目以 CC BY-NC-SA 4.0 许可共享（见仓库根目录 LICENSE）。

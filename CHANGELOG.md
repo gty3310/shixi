@@ -3,6 +3,23 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.24.0] - 2026-11-01
+
+发布提交：3933af1 · 对比：https://github.com/gty3310/shixi/compare/v1.23.0...v1.24.0 · 标签 v1.24.0
+
+### 新增
+- 更新改「自动下载、点一次安装」：设置「应用更新」组新增「自动下载更新」开关（update_prefs 新键 auto_download，缺省视为开、默认开），与既有「仅 Wi-Fi 下载更新」「自动检查更新」并列
+- 分流决策（纯逻辑 UpdateLogic.decideAutoDownload，自检与手动检查共用）：查到未被忽略的新版后——自动下载关 → v1.22.0 旧弹框流程（更新/以后再说/忽略此版本，点了才下）一字未动；自动下载开但「仅 Wi-Fi」开着且当前非 Wi-Fi → 本次不下、退回旧弹框；其余 → 立刻后台下载、不弹更新框，下载中只一条低优先级（IMPORTANCE_LOW）进度通知、带「取消」钮（经广播置位取消标志），不高打扰
+- 就绪状态持久化：下载完成且 size+sha256 验过后写 update_prefs（ready_code、ready_version_name、ready_path、ready_notes，另存 ready_size/ready_sha256 供复查）；App 在前台弹「新版已备好」框（版本号＋说明＋安装/稍后，稍后不清除就绪），不在前台发通知「弦歌新版 vX 已下载 · 点此安装」，点之经新增透明落点页 UpdateInstallActivity 复用既有 install 入口（UpdateFileProvider＋ACTION_VIEW）调系统安装，不另起一套；下载失败/取消不留残件、不留假就绪、自检场景静默收尾下次再试
+- 就绪健壮性：冷启动后台全校验复查就绪件（文件不存在/大小或 sha256 不过 → 作废清键删坏件、可重新自动下载；就绪版本已装上亦作废）；已有就绪件又查到更高版本 → 以下载更高版为准、新件验过后删旧件换就绪记录；手动「检查更新」时已有就绪件且就是最新版 → 直接呈现「安装」不重复下载，就绪件低于远端新版 → 走下载新版（自动关则弹框）的常规分流；清单取不到但手头有就绪件时手动检查亦直接呈现安装
+- 忽略此版本语义不变：被忽略的 versionCode 不自动下载、不弹框、不发就绪通知（决策函数 ignored 判定在就绪判定之前）；手动检查仍可见（手动路径传 ignored=false）
+
+### 验收
+- 桌面 harness（tools/update_harness）直驱 UpdateLogic 本体 53 项全过：原 v1.22.0 的 39 项一条不回退（版本比较/忽略名单/双源回退/清单容错/分片/sha256 与校验四结论/24 小时节流）＋新增决策矩阵 14 项（自动开+网络允许→AUTO_DOWNLOAD、自动关→SHOW_DIALOG、仅-Wi-Fi 非 Wi-Fi→SHOW_DIALOG、被忽略→NONE、无新版/远端不高于本地→NONE、就绪==远端→READY_INSTALL 且自动关亦然、就绪低于远端按自动开关分流、就绪不高于本地按未就绪处理、就绪但被忽略→NONE），输出留档 tools/update_harness/harness_output_v1240.txt
+- aapt2 badging 实测 versionCode 48 / versionName 1.24.0，包内含识读原生库（libsherpa-onnx-jni.so、libonnxruntime.so），构建日志无残缺警告；BuildInfo 构建短号＝发布提交 3933af1；APK size 36528857、sha256 224520a6cbe671b971ca7cf4fc8d92acc8808d065240c3e67d6c278ea6a70031、md5 5ab8d8423c7493c5bdc5c227a3ac5374
+- 代码走查：下载核心抽为 downloadAndVerify 供对话框旧流程与后台新流程共用（逐源、校验不过删文件换源、落位同一口径）；前台/后台呈现判定走 Application.ActivityLifecycleCallbacks 追踪 resumedActivity；通知渠道分下载（LOW）/就绪（DEFAULT）两条，通知发送失败被吞掉不影响下载与就绪本身；update_prefs 与 cacheDir/updates/ 之外不碰任何用户数据
+- 真机未验：自检触发自动下载、下载通知与取消、就绪弹框、通知点装、重启后就绪复查、从 v1.23.0 经新链路升到本版，待用户实测
+
 ## [1.23.0] - 2026-11-01
 
 发布提交：1a218c3 · 对比：https://github.com/gty3310/shixi/compare/v1.22.0...v1.23.0 · 标签 v1.23.0
