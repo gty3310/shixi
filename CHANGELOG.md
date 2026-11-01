@@ -3,6 +3,25 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.23.0] - 2026-11-01
+
+发布提交：b2368be · 对比：https://github.com/gty3310/shixi/compare/v1.22.0...v1.23.0 · 标签 v1.23.0
+
+### 新增
+- 复习页双页签：顶部原生分段切换「笔记 / 待熟」（样式与设置页状态钮同口径：朱砂实心白字＝选中、透明描边灰字＝未选）；上次页签持久化（ui_prefs/review_tab_weak），下次进复习页落回该页签；唯一覆盖入口＝识读流程结束——ReaderActivity.stopRecite 写 ui_prefs/force_review_weak_once 标记，MainActivity.onResume 消费后强制落「待熟」一次（另有 EXTRA_OPEN_REVIEW_WEAK intent 入口），不覆盖持久化记忆
+- 「笔记」页签：直读 NotesStore（files/notes.json），只汇 note 正文非空条目（纯标记条目不汇）；聚合抽纯逻辑类 NotesDigest（按书分组，9621 六书序在前、其余按首次出现序；组内按 flat 句序升序），每条显示书名分组、章/句位置标签、整句原文与笔记全文；点条目复用既有 jumpToSentence（ReaderActivity.EXTRA_TRACK_ID + EXTRA_SCROLL_SENT_ID）落句，不另写跳转
+- 「待熟」页签：原 review.html 四档内容（确定错/请确认/机器可能听错/漏读，含转正、勾销、长按删除等既有交互与统计口径）原样搬入，数据与行为零变化；WebView 按 DATA.tab 只渲染当前页签
+
+### 修复
+- PlanEngine 预计完成日错数（现场：计划 2026-11-01 启用、截止 2027-08-01 剩 274 天、总进度 1%、第 1 天《大学》读 1 遍，状态行报「慢于节奏 · 预计晚 601 天」）。601 来历：旧外推把近 7 天折算量固定除以 7——第 1 天 1 遍折算 1.0、假日均 0.143；剩余折算总量 125（大学剩 20 + 其余五本各 21），还需 ceil(125/0.143)=875 天，预计完成 = 今天+874 天，距截止日（今天+273 天）恰晚 601 天。新口径：数据不足（启用未满 7 天，或窗口内无有效进度的日子占多数）→ 中性档、预计完成日＝截止日、不报晚天数；窗口只数启用后的日子（至多 7 天），日均按窗口实际天数折算；护栏：预计晚天数 ≤ 剩余天数（预计完成日最远＝截止日＋剩余天数），任何输入不产出与剩余天数不成比例的数
+- 未下载书手动记录入口缺失：v1.21.0 的手动入账只挂在计划页「今日」块、且只对当前阶段（「今日已按建议读完」仅当前阶段缺书时出现＋「记一笔」），阶段表里的阶段行没有任何点击监听，未轮到的未下载阶段无入口。本版：未下载阶段整行可点开手动记录弹层——现状一行（单位与总量取自阶段数据，如《道德经》共 81 章 · 已记 X / 1701 章·遍）、「今日已按建议读完」（当前阶段用引擎今日建议并按今日已记补足差额；非当前阶段引擎无今日建议，按 PlanEngine.stageDailySuggestion 每日基准量入账：分得天数＝剩余天数×本阶段 shareDays÷未完成阶段 shareDays 之和，建议＝剩余量÷分得天数取整、章级化为 K×N，如道德经基准 52 章·遍/日）、自定义「读了 X 章 · 每章 Y 遍」记一笔、最近记录列表（标「手动」）＋删最近一笔；入账统一走 PlanStore.addManualOn → plan.json manualEntries，记完即重建计划页与首页进度带。已下载阶段行点进 ChapterListActivity 章卡片（阶段行此前无点击，此为同书卡「章」入口一致的去处）
+
+### 验收
+- 桌面 harness：PlanHarness 43 项全过（原 37 项不回退＋新增 6 项：601 现场复刻→中性档且预计＝截止日、逐日照建议读预计不晚于截止日、两倍速度预计提前、极慢时护栏 lateDays≤remainingDays、道德经基准量 52、剩余天数/总进度现场值），NotesHarness 6 项全过（跨书分组、六书序、组内 flat 句序、空/空白笔记过滤、mark-only 排除、空/ null 输入），输出留档 tools/plan_harness/harness_output_v1230.txt 与 tools/notes_harness/harness_output_v1230.txt
+- aapt2 badging 实测 versionCode 47 / versionName 1.23.0，包内含识读原生库（libsherpa-onnx-jni.so、libonnxruntime.so），无残缺警告；BuildInfo 构建短号＝发布提交 b2368be；APK size 36524761、sha256 d9ec536c542f2d78940fdf7ac6370b5f932e48038a1cb0b419fa3af291082cb4、md5 08b57f77a3e46580be12ddba0dc4a2e5
+- 代码走查：阶段行点击分发（未下载→弹层 / 已下载→章卡片 / 已完成→无点击）、弹层三条入账路径均写 manualEntries 且返回计划页细账即变、笔记条目点击与识读复习条目共用 jumpToSentence、页签强制标记只消费一次
+- 真机未验：页签切换观感、笔记跳转落点精度、手动记录弹层操作手感、应用内更新从 v1.22.0 升到本版的实际链路，待用户实测
+
 ## [1.22.0] - 2026-11-01
 
 发布提交：0279c05 · 对比：https://github.com/gty3310/shixi/compare/v1.21.0...v1.22.0 · 标签 v1.22.0
