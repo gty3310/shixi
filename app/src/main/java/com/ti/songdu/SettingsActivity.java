@@ -404,6 +404,9 @@ public class SettingsActivity extends Activity {
         addSegRow(root, "自动检查更新", new String[]{"开", "关"},
                 AppUpdater.isAutoCheck(this) ? 0 : 1,
                 idx -> AppUpdater.setAutoCheck(this, idx == 0));
+        addSegRow(root, "自动下载更新", new String[]{"开", "关"},
+                AppUpdater.isAutoDownload(this) ? 0 : 1,
+                idx -> AppUpdater.setAutoDownload(this, idx == 0));
 
         addDivider(root);
 

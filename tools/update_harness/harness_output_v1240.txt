@@ -1,0 +1,54 @@
+  PASS remote 46 > local 45 -> hasUpdate
+  PASS remote 46 == local 46 -> no update
+  PASS remote 44 < local 46 -> no update
+  PASS compareCodes sign
+  PASS full manifest parses
+  PASS fields: code/name/size/sha/notes
+  PASS source order gitee->github
+  PASS whole-file sources not sharded
+  PASS ignored hit suppresses auto-show
+  PASS ignored miss still auto-shows
+  PASS ignored=0 never suppresses
+  PASS manual path ignores the ignore-list (hasUpdate still true)
+  PASS no update -> no auto-show even when not ignored
+  PASS fallback on NETWORK
+  PASS fallback on HTTP
+  PASS fallback on IO
+  PASS fallback on VERIFY
+  PASS no fallback on CANCELLED
+  PASS no fallback on NO_WIFI
+  PASS missing notes tolerated (empty string)
+  PASS missing github source tolerated (gitee only)
+  PASS missing versionCode -> null (fatal, no guessing)
+  PASS garbage json -> null
+  PASS no sources -> null
+  PASS null input -> null
+  PASS sharded manifest parses, 3 parts in order
+  PASS fake-newer manifest (47 > local 46) -> hasUpdate
+  PASS sha256 known vector (abc)
+  PASS verify OK
+  PASS verify OK case-insensitive sha
+  PASS verify size mismatch
+  PASS verify sha mismatch
+  PASS verify sha missing in manifest -> SHA_MISSING (not installed)
+  PASS verify size skipped when manifest size absent (-1)
+  PASS auto-check: never checked -> true
+  PASS auto-check: 25h ago -> true
+  PASS auto-check: 1h ago -> false (throttled)
+  PASS auto-check: exactly 24h -> true
+  PASS auto-check: disabled -> false
+  PASS decide: auto on + wifi ok -> AUTO_DOWNLOAD
+  PASS decide: auto on + wifiOnly + on wifi -> AUTO_DOWNLOAD
+  PASS decide: auto off -> SHOW_DIALOG (old dialog flow)
+  PASS decide: auto on + wifiOnly + not on wifi -> SHOW_DIALOG
+  PASS decide: auto off + wifiOnly + not wifi -> SHOW_DIALOG
+  PASS decide: ignored -> NONE (no download, no dialog, no ready notice)
+  PASS decide: no update -> NONE
+  PASS decide: remote <= local -> NONE even if hasUpdate flag wrong
+  PASS decide: ready == remote -> READY_INSTALL (even auto off)
+  PASS decide: ready == remote + auto on -> READY_INSTALL (no re-download)
+  PASS decide: ready older than remote + auto on -> AUTO_DOWNLOAD (newer wins)
+  PASS decide: ready older than remote + auto off -> SHOW_DIALOG
+  PASS decide: ready not above local (stale) + auto on -> AUTO_DOWNLOAD
+  PASS decide: ready == remote but ignored -> NONE (ignore wins)
+TOTAL passed=53 failed=0

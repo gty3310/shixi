@@ -138,6 +138,52 @@ public class UpdateHarness {
         check("auto-check: disabled -> false",
                 !UpdateLogic.shouldAutoCheck(0, now, false));
 
+
+        // ---------- v1.24.0 自动下载决策矩阵 ----------
+        // 基线：远端 48、本地 47、有新版、未忽略、无就绪件
+        check("decide: auto on + wifi ok -> AUTO_DOWNLOAD",
+                UpdateLogic.decideAutoDownload(true, false, true, false, false, 0, 48, 47)
+                        == UpdateLogic.AutoDecision.AUTO_DOWNLOAD);
+        check("decide: auto on + wifiOnly + on wifi -> AUTO_DOWNLOAD",
+                UpdateLogic.decideAutoDownload(true, false, true, true, true, 0, 48, 47)
+                        == UpdateLogic.AutoDecision.AUTO_DOWNLOAD);
+        check("decide: auto off -> SHOW_DIALOG (old dialog flow)",
+                UpdateLogic.decideAutoDownload(false, false, true, false, true, 0, 48, 47)
+                        == UpdateLogic.AutoDecision.SHOW_DIALOG);
+        check("decide: auto on + wifiOnly + not on wifi -> SHOW_DIALOG",
+                UpdateLogic.decideAutoDownload(true, false, true, true, false, 0, 48, 47)
+                        == UpdateLogic.AutoDecision.SHOW_DIALOG);
+        check("decide: auto off + wifiOnly + not wifi -> SHOW_DIALOG",
+                UpdateLogic.decideAutoDownload(false, false, true, true, false, 0, 48, 47)
+                        == UpdateLogic.AutoDecision.SHOW_DIALOG);
+        check("decide: ignored -> NONE (no download, no dialog, no ready notice)",
+                UpdateLogic.decideAutoDownload(true, true, true, false, true, 0, 48, 47)
+                        == UpdateLogic.AutoDecision.NONE);
+        check("decide: no update -> NONE",
+                UpdateLogic.decideAutoDownload(true, false, false, false, true, 0, 47, 47)
+                        == UpdateLogic.AutoDecision.NONE);
+        check("decide: remote <= local -> NONE even if hasUpdate flag wrong",
+                UpdateLogic.decideAutoDownload(true, false, true, false, true, 0, 46, 47)
+                        == UpdateLogic.AutoDecision.NONE);
+        check("decide: ready == remote -> READY_INSTALL (even auto off)",
+                UpdateLogic.decideAutoDownload(false, false, true, true, false, 48, 48, 47)
+                        == UpdateLogic.AutoDecision.READY_INSTALL);
+        check("decide: ready == remote + auto on -> READY_INSTALL (no re-download)",
+                UpdateLogic.decideAutoDownload(true, false, true, false, false, 48, 48, 47)
+                        == UpdateLogic.AutoDecision.READY_INSTALL);
+        check("decide: ready older than remote + auto on -> AUTO_DOWNLOAD (newer wins)",
+                UpdateLogic.decideAutoDownload(true, false, true, false, true, 48, 49, 47)
+                        == UpdateLogic.AutoDecision.AUTO_DOWNLOAD);
+        check("decide: ready older than remote + auto off -> SHOW_DIALOG",
+                UpdateLogic.decideAutoDownload(false, false, true, false, true, 48, 49, 47)
+                        == UpdateLogic.AutoDecision.SHOW_DIALOG);
+        check("decide: ready not above local (stale) + auto on -> AUTO_DOWNLOAD",
+                UpdateLogic.decideAutoDownload(true, false, true, false, true, 47, 48, 47)
+                        == UpdateLogic.AutoDecision.AUTO_DOWNLOAD);
+        check("decide: ready == remote but ignored -> NONE (ignore wins)",
+                UpdateLogic.decideAutoDownload(true, true, true, false, true, 48, 48, 47)
+                        == UpdateLogic.AutoDecision.NONE);
+
         System.out.println("TOTAL passed=" + passed + " failed=" + failed);
         if (failed > 0) System.exit(1);
     }

@@ -76,6 +76,17 @@
             android:name=".HelpActivity"
             android:exported="false" />
 
+        <!-- v1.24.0 就绪通知点装落点（透明页，只转交 AppUpdater.installReady） -->
+        <activity
+            android:name=".UpdateInstallActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- v1.24.0 更新下载通知的「取消」动作 -->
+        <receiver
+            android:name=".UpdateActionReceiver"
+            android:exported="false" />
+
         <!-- v1.22.0 更新包文件共享（框架 ContentProvider，见 UpdateFileProvider） -->
         <provider
             android:name=".UpdateFileProvider"

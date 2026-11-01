@@ -37,4 +37,18 @@
   PASS auto-check: 1h ago -> false (throttled)
   PASS auto-check: exactly 24h -> true
   PASS auto-check: disabled -> false
-TOTAL passed=39 failed=0
+  PASS decide: auto on + wifi ok -> AUTO_DOWNLOAD
+  PASS decide: auto on + wifiOnly + on wifi -> AUTO_DOWNLOAD
+  PASS decide: auto off -> SHOW_DIALOG (old dialog flow)
+  PASS decide: auto on + wifiOnly + not on wifi -> SHOW_DIALOG
+  PASS decide: auto off + wifiOnly + not wifi -> SHOW_DIALOG
+  PASS decide: ignored -> NONE (no download, no dialog, no ready notice)
+  PASS decide: no update -> NONE
+  PASS decide: remote <= local -> NONE even if hasUpdate flag wrong
+  PASS decide: ready == remote -> READY_INSTALL (even auto off)
+  PASS decide: ready == remote + auto on -> READY_INSTALL (no re-download)
+  PASS decide: ready older than remote + auto on -> AUTO_DOWNLOAD (newer wins)
+  PASS decide: ready older than remote + auto off -> SHOW_DIALOG
+  PASS decide: ready not above local (stale) + auto on -> AUTO_DOWNLOAD
+  PASS decide: ready == remote but ignored -> NONE (ignore wins)
+TOTAL passed=53 failed=0

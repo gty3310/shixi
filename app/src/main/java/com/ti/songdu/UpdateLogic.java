@@ -162,6 +162,31 @@ public final class UpdateLogic {
         return Verify.OK;
     }
 
+
+    /** 自动下载决策结论（v1.24.0） */
+    public enum AutoDecision {SHOW_DIALOG, AUTO_DOWNLOAD, READY_INSTALL, NONE}
+
+    /**
+     * 自动下载决策（v1.24.0 纯函数）：自检与手动检查共用（手动检查调用方
+     * 传 ignored=false——忽略名单只挡自动路径，手动仍可见）。
+     * 判定序：无新版→NONE；被忽略→NONE；已有就绪件且版本不低于远端新版
+     * （且高于本地）→READY_INSTALL（直接装、不重复下载）；自动下载关→
+     * SHOW_DIALOG（旧弹框）；开着仅-Wi-Fi 且当前非 Wi-Fi→SHOW_DIALOG；
+     * 其余→AUTO_DOWNLOAD（后台下载）。readyCode 传 0 表示无有效就绪件
+     * （就绪件的存活校验由装配层先做，校验不过一律按 0 传）。
+     */
+    public static AutoDecision decideAutoDownload(boolean autoDownload, boolean ignored,
+                                                  boolean hasUpdate, boolean wifiOnly,
+                                                  boolean onWifi, int readyCode,
+                                                  int remoteCode, int localCode) {
+        if (!hasUpdate || remoteCode <= localCode) return AutoDecision.NONE;
+        if (ignored) return AutoDecision.NONE;
+        if (readyCode > localCode && readyCode >= remoteCode) return AutoDecision.READY_INSTALL;
+        if (!autoDownload) return AutoDecision.SHOW_DIALOG;
+        if (wifiOnly && !onWifi) return AutoDecision.SHOW_DIALOG;
+        return AutoDecision.AUTO_DOWNLOAD;
+    }
+
     /** 流式 sha256（小写十六进制），App 与 harness 共用 */
     public static String sha256Hex(InputStream in) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
