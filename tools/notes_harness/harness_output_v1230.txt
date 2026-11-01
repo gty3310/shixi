@@ -1,0 +1,7 @@
+  PASS groups: 3 books kept (zhongyong mark-only dropped)
+  PASS groups: canon order daxue < lunyu < mengzi
+  PASS groups: daxue has 2 (empty/blank filtered)
+  PASS groups: within-book sorted by flat asc
+  PASS groups: empty input -> no groups
+  PASS groups: null input -> no groups
+NotesHarness: 6 passed, 0 failed

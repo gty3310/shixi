@@ -295,6 +295,87 @@ public class PlanHarness {
                 CompletionPolicy.chapterBoundary(false, true, false)
                         == CompletionPolicy.ChapterAction.CONTINUE);
 
+        // ---------- v1.23.0 (B) 601 回归 + 数据不足口径 + 护栏 ----------
+        {
+            // 现场复刻：9621 六阶段，2026-11-01 启用、截止 2027-08-01（剩 274 天），
+            // 第 1 天《大学》读 1 遍。旧实现：近7天折算 1.0 / 7 = 日均 0.143，
+            // 剩余折算 125 -> 还需 875 天 -> 预计晚 601 天。
+            LocalDate start = LocalDate.of(2026, 11, 1);
+            LocalDate deadline = LocalDate.of(2027, 8, 1);
+            PlanData p = plan(start, deadline,
+                    stage("daxue", PlanData.UNIT_WHOLE, 0, 21, 4, 0),
+                    stage("zhongyong", PlanData.UNIT_WHOLE, 0, 21, 7, 0),
+                    stage("lunyu", PlanData.UNIT_ZHANG, 20, 420, 80, 5),
+                    stage("mengzi", PlanData.UNIT_ZHANG, 14, 294, 98, 3),
+                    stage("tanjing", PlanData.UNIT_ZHANG, 10, 210, 40, 5),
+                    stage("daodejing", PlanData.UNIT_ZHANG, 81, 1701, 32, 2));
+            FakeProvider prov = new FakeProvider();
+            prov.set(0, start, 1);
+            PlanEngine.Result r = PlanEngine.compute(p, prov, start);
+            check("v123 day1: neutral pace + predicted == deadline (601 regression)",
+                    r.pace == PlanEngine.Pace.ON_TRACK && r.lateDays == 0
+                            && deadline.equals(r.predictedFinish) && !r.paceReliable);
+            check("v123 day1: remainingDays 274 + total progress 1%",
+                    r.remainingDays == 274 && r.totalProgressPct == 1);
+        }
+        {
+            // ② 自启用起每天恰按建议量读 -> 预计完成日不晚于截止日
+            LocalDate start = LocalDate.of(2026, 11, 1);
+            LocalDate deadline = start.plusDays(99); // 100 天
+            PlanData p = plan(start, deadline,
+                    stage("daxue", PlanData.UNIT_WHOLE, 0, 21, 4, 0));
+            FakeProvider prov = new FakeProvider();
+            LocalDate day = start;
+            PlanEngine.Result r = null;
+            for (int i = 0; i < 40; i++) {
+                r = PlanEngine.compute(p, prov, day);
+                if (r.finished) break;
+                prov.add(r.currentStage, day, r.todaySuggestionUnits);
+                day = day.plusDays(1);
+                r = PlanEngine.compute(p, prov, day);
+            }
+            check("v123 follow-suggestion: predicted not after deadline",
+                    r != null && (r.finished || (r.predictedFinish != null
+                            && !r.predictedFinish.isAfter(deadline))));
+        }
+        {
+            // ③ 持续两倍建议量 -> 预计提前于截止日
+            LocalDate start = LocalDate.of(2026, 11, 1);
+            LocalDate deadline = start.plusDays(99);
+            PlanData p = plan(start, deadline,
+                    stage("daxue", PlanData.UNIT_WHOLE, 0, 21, 4, 0));
+            FakeProvider prov = new FakeProvider();
+            LocalDate day = start;
+            for (int i = 0; i < 8; i++) {
+                PlanEngine.Result rr = PlanEngine.compute(p, prov, day);
+                if (rr.finished) break;
+                prov.add(rr.currentStage, day, rr.todaySuggestionUnits * 2);
+                day = day.plusDays(1);
+            }
+            PlanEngine.Result r = PlanEngine.compute(p, prov, day);
+            check("v123 double-speed: predicted before deadline",
+                    r.predictedFinish != null && r.predictedFinish.isBefore(deadline));
+        }
+        {
+            // 护栏：数据足够但极慢时，晚天数也不得超过剩余天数
+            LocalDate today = LocalDate.of(2026, 12, 1);
+            LocalDate start = today.minusDays(30);
+            LocalDate deadline = today.plusDays(69); // 剩余 70 天
+            PlanData p = plan(start, deadline,
+                    stage("big", PlanData.UNIT_WHOLE, 0, 700, 10, 0));
+            FakeProvider prov = new FakeProvider();
+            for (int i = 0; i <= 30; i++) prov.set(0, start.plusDays(i), 1); // 每天 1，共 31
+            PlanEngine.Result r = PlanEngine.compute(p, prov, today);
+            check("v123 guardrail: SLOW but lateDays <= remainingDays",
+                    r.pace == PlanEngine.Pace.SLOW && r.lateDays > 0
+                            && r.lateDays <= r.remainingDays
+                            && deadline.plusDays(r.lateDays).equals(r.predictedFinish));
+            // 非当前阶段每日基准量（道德经口径）：剩余 1701、share 32/261、剩 274 天
+            PlanData.Stage dj = stage("daodejing", PlanData.UNIT_ZHANG, 81, 1701, 32, 2);
+            int base = PlanEngine.stageDailySuggestion(dj, 0, 261, 274);
+            check("v123 baseline suggestion daodejing == 52 (26章 x 2遍)", base == 52);
+        }
+
         System.out.println("PlanHarness: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
     }

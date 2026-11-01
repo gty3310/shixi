@@ -84,6 +84,13 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private LinearLayout planContainer, todayPlanBand;
     private Button navPlay, navPlan;
     private android.webkit.WebView pageReview;
+    private View pageReviewWrap;
+    private TextView tabBtnNotes, tabBtnWeak;
+    /** v1.23.0 复习页双页签：false=笔记 / true=待熟。落回上次页签（ui_prefs/review_tab）；
+     *  识读流程结束跳来时 reviewForceWeak 强制待熟一次，不覆盖持久化记忆 */
+    private boolean reviewForceWeak = false;
+    /** v1.23.0：带此 extra 回到主页时打开复习页并强制落「待熟」 */
+    public static final String EXTRA_OPEN_REVIEW_WEAK = "open_review_weak";
     private Button navReview;
     private int curPage = 0;
     private final List<TextView> speedChips = new ArrayList<>();
@@ -149,9 +156,19 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         navPlay = findViewById(R.id.navPlay);
         navPlan = findViewById(R.id.navPlan);
         pageReview = findViewById(R.id.pageReview);
+        pageReviewWrap = findViewById(R.id.pageReviewWrap);
+        tabBtnNotes = findViewById(R.id.tabBtnNotes);
+        tabBtnWeak = findViewById(R.id.tabBtnWeak);
         navReview = findViewById(R.id.navReview);
         pageReview.getSettings().setJavaScriptEnabled(true);
         pageReview.addJavascriptInterface(new ReviewBridge(), "Bridge");
+        tabBtnNotes.setOnClickListener(v -> setReviewTab(false));
+        tabBtnWeak.setOnClickListener(v -> setReviewTab(true));
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_OPEN_REVIEW_WEAK, false)) {
+            getIntent().removeExtra(EXTRA_OPEN_REVIEW_WEAK);
+            reviewForceWeak = true;
+            postShowReviewWeak();
+        }
 
         expandedGroups.addAll(getSharedPreferences("ui_prefs", MODE_PRIVATE)
                 .getStringSet("expandedGroups", new HashSet<>()));
@@ -1644,8 +1661,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     private void showPage(int page) {
         curPage = page;
         showingCalendar = page == 2;
+        if (page != 1) reviewForceWeak = false;
         pagePlay.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
-        pageReview.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
+        pageReviewWrap.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
         pagePlan.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
         Button[] navs = {navPlay, navReview, navPlan};
         for (int i = 0; i < navs.length; i++) {
@@ -1653,7 +1671,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             navs[i].setTextColor(getColor(on ? R.color.accent : R.color.muted));
             navs[i].setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
         }
-        if (page == 1) loadReviewPage();
+        if (page == 1) { styleReviewTabs(); loadReviewPage(); }
         if (page == 2) {
             buildPlanPage();
             buildCalendar();
@@ -1805,9 +1823,20 @@ public class MainActivity extends Activity implements PlayerService.Listener {
                 int curPass = st.totalUnits > 0
                         ? Math.min(st.totalPasses, done * st.totalPasses / st.totalUnits + 1) : 1;
                 right = st.isZhang() ? "进行中 · 第 " + curPass + " 遍" : "第 " + curPass + " 遍 · 进行中";
-            } else if (!avail) right = "还没下载 · 手动记录";
+            } else if (!avail) right = "还没下载 · 手动记录 ›";
             else right = "0 / " + st.totalPasses + " 遍";
             row.addView(planText(right, 13.5f, completed ? R.color.accent : R.color.muted, false));
+            if (!completed) {
+                final int stageIdx = i;
+                if (!avail) {
+                    // v1.23.0：未下载阶段整行可点 → 手动记录弹层（v1.21.0 时只有文字、点不动）
+                    row.setOnClickListener(v -> showManualRecordDialog(ps, plan, res, stageIdx, today));
+                } else {
+                    // 已下载阶段行 → 章卡片（与书卡「章」入口同一去处）
+                    row.setOnClickListener(v -> startActivity(new Intent(this, ChapterListActivity.class)
+                            .putExtra(ChapterListActivity.EXTRA_BOOK_ID, st.bookId)));
+                }
+            }
             planContainer.addView(row);
             if (st.isZhang()) {
                 planContainer.addView(planTextLp("细账 " + done + " / " + st.totalUnits + " "
@@ -1957,6 +1986,147 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         noteBtn.setOnClickListener(v -> showPlanNoteDialog(ps, st, ci, today));
         btns.addView(noteBtn);
         planContainer.addView(btns);
+    }
+
+    /**
+     * v1.23.0 未下载书手动记录弹层：现状一行＋「今日已按建议读完」整额入账＋
+     * 自定义一笔＋最近记录（可删最近一笔）。入账全走 PlanStore.addManualOn →
+     * plan.json manualEntries（与 v1.21.0 今日块同一账本），记完即重建计划页。
+     * 「今日已按建议读完」的量：该阶段是当前阶段时用引擎今日建议；非当前阶段
+     * 引擎不给今日建议，按 PlanEngine.stageDailySuggestion 每日基准量整额入账。
+     */
+    private void showManualRecordDialog(PlanStore ps, PlanData plan, PlanEngine.Result res,
+                                        int stageIdx, LocalDate today) {
+        PlanData.Stage st = plan.stages.get(stageIdx);
+        int done = res.donePerStage.get(stageIdx);
+        String unitLabel = st.isZhang() ? st.unitName + "·遍" : "遍";
+        long shareSum = 0;
+        for (int i = 0; i < plan.stages.size(); i++)
+            if (!res.completedPerStage.get(i)) shareSum += Math.max(0, plan.stages.get(i).shareDays);
+        final int sugg = stageIdx == res.currentStage
+                ? res.todaySuggestionUnits
+                : PlanEngine.stageDailySuggestion(st, done, shareSum, res.remainingDays);
+        final int suggRemaining = Math.max(0, sugg - (stageIdx == res.currentStage ? res.todayDone : 0));
+
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(10), dp(20), dp(4));
+        String status;
+        if (st.isZhang()) {
+            status = "《" + st.bookTitle + "》共 " + st.chapterCount + " " + st.unitName
+                    + " · 已记 " + done + " / " + st.totalUnits + " " + unitLabel;
+        } else {
+            status = "《" + st.bookTitle + "》· 已记 " + done + " / " + st.totalUnits + " " + unitLabel;
+        }
+        form.addView(planText(status, 14.5f, R.color.ink, false));
+        form.addView(planTextLp("今日建议 " + sugg + " " + unitLabel, 13, R.color.muted, false, 6));
+
+        final android.app.AlertDialog[] dlg = new android.app.AlertDialog[1];
+        TextView doneBtn = planText("今日已按建议读完", 15, R.color.ink, true);
+        doneBtn.setGravity(Gravity.CENTER);
+        doneBtn.setBackgroundResource(R.drawable.pill_outline);
+        doneBtn.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams dblp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dblp.topMargin = dp(10);
+        doneBtn.setLayoutParams(dblp);
+        if (suggRemaining <= 0) {
+            doneBtn.setText("今日建议已记完");
+            doneBtn.setTextColor(getColor(R.color.muted));
+        } else {
+            doneBtn.setOnClickListener(v -> {
+                ps.addManualOn(stageIdx, suggRemaining, today);
+                Toast.makeText(this, "已记 " + suggRemaining + " " + unitLabel, Toast.LENGTH_SHORT).show();
+                if (dlg[0] != null) dlg[0].dismiss();
+                buildPlanPage();
+                buildPlanBand();
+            });
+        }
+        form.addView(doneBtn);
+
+        // 自定义一笔
+        final EditText first = new EditText(this);
+        first.setInputType(InputType.TYPE_CLASS_NUMBER);
+        first.setTextSize(16);
+        final EditText second = new EditText(this);
+        second.setInputType(InputType.TYPE_CLASS_NUMBER);
+        second.setTextSize(16);
+        if (st.isZhang()) {
+            first.setHint("读了几" + st.unitName + "（如 1）");
+            second.setHint("每" + st.unitName + "几遍（如 " + Math.max(1, st.passesPerChapter) + "）");
+            form.addView(first);
+            form.addView(second);
+        } else {
+            first.setHint("读了几遍");
+            form.addView(first);
+        }
+        TextView noteBtn = planText("记一笔", 14.5f, R.color.ink, false);
+        noteBtn.setGravity(Gravity.CENTER);
+        noteBtn.setBackgroundResource(R.drawable.pill_outline);
+        noteBtn.setPadding(dp(12), dp(8), dp(12), dp(8));
+        LinearLayout.LayoutParams nlp2 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nlp2.topMargin = dp(8);
+        noteBtn.setLayoutParams(nlp2);
+        noteBtn.setOnClickListener(v -> {
+            int a = parsePlanInt(first.getText().toString(), 0);
+            int units = st.isZhang() ? a * parsePlanInt(second.getText().toString(), 0) : a;
+            if (units <= 0) {
+                Toast.makeText(this, "没有填数量", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            ps.addManualOn(stageIdx, units, today);
+            Toast.makeText(this, "已记 " + units + " " + unitLabel, Toast.LENGTH_SHORT).show();
+            if (dlg[0] != null) dlg[0].dismiss();
+            buildPlanPage();
+            buildPlanBand();
+        });
+        form.addView(noteBtn);
+
+        // 最近记录（手动账，日期倒序，最多 5 条）＋删最近一笔
+        List<Map.Entry<String, Integer>> recent = manualEntriesForStage(plan, stageIdx);
+        if (!recent.isEmpty()) {
+            form.addView(planTextLp("最近记录", 13, R.color.accent, true, 14));
+            int shown = 0;
+            for (Map.Entry<String, Integer> e : recent) {
+                if (shown++ >= 5) break;
+                LocalDate d = LocalDate.parse(e.getKey());
+                form.addView(planTextLp(d.getMonthValue() + "月" + d.getDayOfMonth() + "日 · "
+                        + e.getValue() + " " + unitLabel + " · 手动", 13.5f, R.color.muted, false, 2));
+            }
+            Map.Entry<String, Integer> last = recent.get(0);
+            TextView delBtn = planText("删最近一笔", 13.5f, R.color.accent, false);
+            LinearLayout.LayoutParams dlp2 = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            dlp2.topMargin = dp(8);
+            delBtn.setLayoutParams(dlp2);
+            delBtn.setOnClickListener(v -> {
+                ps.addManualOn(stageIdx, -last.getValue(), LocalDate.parse(last.getKey()));
+                Toast.makeText(this, "已删最近一笔", Toast.LENGTH_SHORT).show();
+                if (dlg[0] != null) dlg[0].dismiss();
+                buildPlanPage();
+                buildPlanBand();
+            });
+            form.addView(delBtn);
+        }
+
+        dlg[0] = new AlertDialog.Builder(this)
+                .setTitle("手动记录 · 《" + st.bookTitle + "》")
+                .setView(form)
+                .setNegativeButton("关闭", null)
+                .create();
+        dlg[0].show();
+    }
+
+    /** 某阶段的手动入账明细（日期倒序） */
+    private List<Map.Entry<String, Integer>> manualEntriesForStage(PlanData plan, int stageIdx) {
+        List<Map.Entry<String, Integer>> out = new ArrayList<>();
+        for (Map.Entry<String, Map<Integer, Integer>> e : plan.manualEntries.entrySet()) {
+            Integer v = e.getValue().get(stageIdx);
+            if (v != null && v != 0) out.add(new java.util.AbstractMap.SimpleEntry<>(e.getKey(), v));
+        }
+        out.sort((a, b) -> b.getKey().compareTo(a.getKey()));
+        return out;
     }
 
     private void showPlanNoteDialog(PlanStore ps, PlanData.Stage st, int stageIdx, LocalDate today) {
@@ -2219,38 +2389,111 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             }
             root.put("books", booksArr);
 
-            // —— 我的笔记 ——
-            JSONArray notesArr = new JSONArray();
+            // —— 我的笔记（v1.23.0：独立「笔记」页签，聚合口径在 NotesDigest） ——
+            // 只汇 note 正文非空者；按书分组、组内按 flat 句序；位置标签在此补齐
+            root.put("tab", reviewTabWeak() ? "weak" : "notes");
             java.text.SimpleDateFormat df = new java.text.SimpleDateFormat(
                     "M月d日", java.util.Locale.CHINA);
+            List<NotesDigest.Entry> entries = new ArrayList<>();
             for (NotesStore.Item it : NotesStore.get(this).allDesc()) {
-                JSONObject no = new JSONObject();
-                no.put("bookId", it.bookId);
-                no.put("sentId", it.sentId);
-                no.put("sentText", it.sentText == null ? "" : it.sentText);
-                no.put("note", it.note == null ? "" : it.note);
-                no.put("mark", it.mark);
-                no.put("markName", it.mark >= 0 && it.mark < NotesStore.MARK_NAMES.length
-                        ? NotesStore.MARK_NAMES[it.mark] : "");
+                NotesDigest.Entry e = new NotesDigest.Entry();
+                e.bookId = it.bookId;
+                e.chapterId = it.chapterId;
+                e.sentId = it.sentId;
+                e.sentText = it.sentText == null ? "" : it.sentText;
+                e.flat = it.flat;
+                e.mark = it.mark;
+                e.note = it.note == null ? "" : it.note;
+                e.updatedAt = it.updatedAt;
                 ContentRepo.Book bk = ContentRepo.load(this, it.bookId);
-                String src = bookTitleOf(bk != null ? bk.title : it.bookId);
+                PlanBooks.BookInfo info = PlanBooks.infoOf(it.bookId);
+                e.bookTitle = bookTitleOf(bk != null ? bk.title
+                        : (info != null ? info.title : it.bookId));
+                String unit = info != null && info.unitName != null && !info.unitName.isEmpty()
+                        ? info.unitName : "章";
+                String pos = "";
                 if (bk != null && it.chapterId != null && !it.chapterId.isEmpty()) {
-                    for (ContentRepo.Chapter ch : bk.chapters) {
-                        if (it.chapterId.equals(ch.id) && ch.title != null
-                                && !ch.title.isEmpty()) {
-                            src = src + " " + ch.title;
+                    for (int ci2 = 0; ci2 < bk.chapters.size(); ci2++) {
+                        ContentRepo.Chapter ch = bk.chapters.get(ci2);
+                        if (it.chapterId.equals(ch.id)) {
+                            pos = ch.title != null && !ch.title.isEmpty()
+                                    ? ch.title : "第 " + (ci2 + 1) + " " + unit;
                             break;
                         }
                     }
                 }
-                no.put("src", src);
-                no.put("dateStr", df.format(new java.util.Date(it.updatedAt)));
-                notesArr.put(no);
+                e.posLabel = pos;
+                entries.add(e);
             }
-            root.put("notes", notesArr);
+            JSONArray groupsArr = new JSONArray();
+            for (NotesDigest.Group g : NotesDigest.group(entries)) {
+                JSONObject go = new JSONObject();
+                go.put("bookId", g.bookId);
+                go.put("title", g.bookTitle);
+                JSONArray itemsArr = new JSONArray();
+                for (NotesDigest.Entry e : g.items) {
+                    JSONObject io = new JSONObject();
+                    io.put("sentId", e.sentId);
+                    io.put("sentText", e.sentText);
+                    io.put("note", e.note);
+                    io.put("mark", e.mark);
+                    io.put("markName", e.mark >= 0 && e.mark < NotesStore.MARK_NAMES.length
+                            ? NotesStore.MARK_NAMES[e.mark] : "");
+                    io.put("posLabel", e.posLabel == null ? "" : e.posLabel);
+                    io.put("flat", e.flat);
+                    io.put("dateStr", df.format(new java.util.Date(e.updatedAt)));
+                    itemsArr.put(io);
+                }
+                go.put("items", itemsArr);
+                groupsArr.put(go);
+            }
+            root.put("notesGroups", groupsArr);
         } catch (Exception ignored) {
         }
         return root;
+    }
+
+    /** 当前复习页签：强制待熟优先，其次持久化记忆（默认待熟，沿用旧版落点） */
+    private boolean reviewTabWeak() {
+        if (reviewForceWeak) return true;
+        return getSharedPreferences("ui_prefs", MODE_PRIVATE).getBoolean("review_tab_weak", true);
+    }
+
+    private void setReviewTab(boolean weak) {
+        reviewForceWeak = false;
+        getSharedPreferences("ui_prefs", MODE_PRIVATE).edit()
+                .putBoolean("review_tab_weak", weak).apply();
+        styleReviewTabs();
+        loadReviewPage();
+    }
+
+    /** 分段切换样式与设置页状态钮同口径：朱砂实心白字＝选中，透明描边灰字＝未选 */
+    private void styleReviewTabs() {
+        if (tabBtnNotes == null || tabBtnWeak == null) return;
+        styleSegBtn(tabBtnNotes, !reviewTabWeak());
+        styleSegBtn(tabBtnWeak, reviewTabWeak());
+    }
+
+    private void styleSegBtn(TextView t, boolean on) {
+        float density = getResources().getDisplayMetrics().density;
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setCornerRadius(999 * density);
+        if (on) {
+            g.setColor(getColor(R.color.accent));
+            t.setTextColor(0xFFFFFFFF);
+            t.setTypeface(null, Typeface.BOLD);
+        } else {
+            g.setColor(0x00000000);
+            g.setStroke(Math.max(1, (int) density), getColor(R.color.border));
+            t.setTextColor(getColor(R.color.muted));
+            t.setTypeface(null, Typeface.NORMAL);
+        }
+        t.setBackground(g);
+    }
+
+    private void postShowReviewWeak() {
+        // onCreate 时机 showPage 依赖的视图尚未全绑定完，延到首帧后落页
+        if (pageReviewWrap != null) pageReviewWrap.post(() -> showPage(1));
     }
 
     private String reviewTemplate;
@@ -2599,11 +2842,24 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             intent.removeExtra(EXTRA_OPEN_ADD);
             showAddBookDialog();
         }
+        if (intent != null && intent.getBooleanExtra(EXTRA_OPEN_REVIEW_WEAK, false)) {
+            intent.removeExtra(EXTRA_OPEN_REVIEW_WEAK);
+            reviewForceWeak = true;
+            showPage(1);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        // v1.23.0：识读流程结束（ReaderActivity.stopRecite 打的标记）→ 回来落复习页「待熟」
+        if (getSharedPreferences("ui_prefs", MODE_PRIVATE)
+                .getBoolean("force_review_weak_once", false)) {
+            getSharedPreferences("ui_prefs", MODE_PRIVATE).edit()
+                    .putBoolean("force_review_weak_once", false).apply();
+            reviewForceWeak = true;
+            showPage(1);
+        }
         PlayerService.listener = this;
         refreshAll();
         refreshOverlayBtn(); // 设置页可能刚改过显示意愿，回来同步钮的样式

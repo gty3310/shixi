@@ -1121,6 +1121,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     }
 
     private void stopRecite() {
+        // v1.23.0：识读流程结束 → 给主页打标记，回去落复习页「待熟」（仅此入口强制）
+        if (reciteSession != null) {
+            getSharedPreferences("ui_prefs", MODE_PRIVATE).edit()
+                    .putBoolean("force_review_weak_once", true).apply();
+        }
         reciteOn = false;
         if (PlayerService.instance != null) PlayerService.instance.chapterSuspended = false;
         if (reciteSession != null) reciteSession.stop();

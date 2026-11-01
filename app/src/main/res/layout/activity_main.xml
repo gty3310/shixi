@@ -233,12 +233,53 @@
         </ScrollView>
 
         <!-- v1.16.0 复习页（底部第三栏）：内容是 assets/review.html 的三级折叠页，
-             数据由 MainActivity 注入（识读统计＋笔记库），与定稿 mockup 同版式 -->
-        <WebView
-            android:id="@+id/pageReview"
+             数据由 MainActivity 注入（识读统计＋笔记库），与定稿 mockup 同版式。
+             v1.23.0：顶部加原生分段切换「笔记 / 待熟」，WebView 只渲染当前页签 -->
+        <LinearLayout
+            android:id="@+id/pageReviewWrap"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:visibility="gone" />
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tabBtnNotes"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingLeft="22dp"
+                    android:paddingTop="7dp"
+                    android:paddingRight="22dp"
+                    android:paddingBottom="7dp"
+                    android:text="笔记"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/tabBtnWeak"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginLeft="10dp"
+                    android:paddingLeft="22dp"
+                    android:paddingTop="7dp"
+                    android:paddingRight="22dp"
+                    android:paddingBottom="7dp"
+                    android:text="待熟"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <WebView
+                android:id="@+id/pageReview"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="6dp"
+                android:layout_weight="1" />
+        </LinearLayout>
     </FrameLayout>
 
     <!-- 播放控制条 -->

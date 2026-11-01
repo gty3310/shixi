@@ -122,7 +122,7 @@
 
 <div class="topbar">
   <div class="t">复习</div>
-  <div class="s">读不熟的字 · 我的笔记，都在这里回看</div>
+  <div class="s" id="topsub">读不熟的字，都在这里回看</div>
 </div>
 
 <div id="root"></div>
@@ -166,7 +166,8 @@ var lpKey = null;    // 当前显示长按小条的字组键
 var foldDoubt = true, foldDel = true;
 var lpFired = false;
 
-function render(){
+function renderWeak(){
+  document.getElementById('topsub').textContent = '读不熟的字，都在这里回看';
   var h = '';
   /* ===== 不熟练的字 ===== */
   h += '<div class="sec-title"><div class="bar"></div><div class="h">不熟练的字</div>' +
@@ -264,22 +265,6 @@ function render(){
     }
     h += '</div>';
   }
-
-  /* ===== 我的笔记 ===== */
-  h += '<div class="sec-title"><div class="bar"></div><div class="h">我的笔记</div>' +
-       '<div class="d">读书时点句记下 · 存本地 · 点一条跳回原句</div></div>';
-  if (!DATA.notes || !DATA.notes.length){
-    h += '<div class="empty">还没有笔记。读书时点任意一句，就能写笔记、打标记。</div>';
-  }
-  (DATA.notes || []).forEach(function(n){
-    var style = n.mark ? ' style="--mc:' + MARK_BAR[n.mark] + '; --mw:' + MARK_BG[n.mark] + ';"' : '';
-    h += '<div class="note"' + style + ' data-book="' + esc(n.bookId) + '" data-sent="' + esc(n.sentId) + '">' +
-         '<div class="sent"' + (n.mark ? '' : ' style="background:rgba(0,0,0,.03);"') + '>' +
-         esc(n.sentText) + '</div>' +
-         (n.note ? '<div class="body">' + esc(n.note) + '</div>' : '') +
-         '<div class="meta"><span>' + esc(n.src) + '</span><span class="tag">' +
-         esc(n.markName ? (n.markName + ' · ') : '') + esc(n.dateStr) + '</span></div></div>';
-  });
 
   document.getElementById('root').innerHTML = h;
   bind();
@@ -381,6 +366,39 @@ function bind(){
         Bridge.jump(el.getAttribute('data-book'), el.getAttribute('data-sent'));
     });
   });
+}
+
+function renderNotes(){
+  document.getElementById('topsub').textContent = '读书时点句记下的，都在这里';
+  var h = '';
+  h += '<div class="sec-title"><div class="bar"></div><div class="h">我的笔记</div>' +
+       '<div class="d">按书汇集 · 点一条跳回原句</div></div>';
+  var groups = DATA.notesGroups || [];
+  if (!groups.length){
+    h += '<div class="empty">还没有写下的笔记</div>';
+  }
+  groups.forEach(function(g){
+    h += '<div class="booksec"><div class="bookhead">' +
+         '<div class="bname">' + esc(g.title) + '</div>' +
+         '<div class="chip">' + g.items.length + ' 条</div></div>';
+    g.items.forEach(function(n){
+      var style = n.mark ? ' style="--mc:' + MARK_BAR[n.mark] + '; --mw:' + MARK_BG[n.mark] + ';"' : '';
+      h += '<div class="note"' + style + ' data-book="' + esc(g.bookId) + '" data-sent="' + esc(n.sentId) + '">' +
+           (n.sentText ? '<div class="sent"' + (n.mark ? '' : ' style="background:rgba(0,0,0,.03);"') + '>' +
+           esc(n.sentText) + '</div>' : '') +
+           '<div class="body">' + esc(n.note) + '</div>' +
+           '<div class="meta"><span>' + esc(n.posLabel || '') + '</span><span class="tag">' +
+           esc(n.markName ? (n.markName + ' · ') : '') + esc(n.dateStr) + '</span></div></div>';
+    });
+    h += '</div>';
+  });
+  document.getElementById('root').innerHTML = h;
+  bind();
+}
+
+function render(){
+  if (DATA.tab === 'notes') renderNotes();
+  else renderWeak();
 }
 
 render();

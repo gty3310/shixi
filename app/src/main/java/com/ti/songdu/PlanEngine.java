@@ -50,6 +50,8 @@ public final class PlanEngine {
         /** 今日已读（当前阶段、今天） */
         public int todayDone = 0;
         public Pace pace = Pace.ON_TRACK;
+        /** v1.23.0：外推是否基于足够数据（false=数据不足、已回中性档） */
+        public boolean paceReliable = false;
         public LocalDate predictedFinish = null;
         /** 慢于节奏时预计晚的天数（相对截止日），其余为 0 */
         public int lateDays = 0;
@@ -187,6 +189,12 @@ public final class PlanEngine {
         }
 
         // 三档状态与预计完成日（全计划折算口径）
+        // v1.23.0 修复「预计晚 601 天」：旧实现把近 7 天折算量固定除以 7——计划第 1 天
+        // 只读 1 遍时日均被稀释 7 倍，再拿这个假日均外推全程剩余量，得出荒谬晚天数。
+        // 新口径：①数据不足（启用未满 7 天，或窗口内无有效进度的日子占多数）→ 中性档、
+        // 预计完成日 = 截止日；②窗口只数计划启用后的日子（至多 7 天），日均按窗口
+        // 实际天数折算；③护栏：预计晚天数不得超过剩余天数（lateDays <= remainingDays），
+        // 预计完成日最远 = 截止日 + 剩余天数，任何输入都不产出与剩余天数不成比例的数。
         double remainingFolded = 0;
         for (int i = 0; i < n; i++) {
             PlanData.Stage st = plan.stages.get(i);
@@ -194,38 +202,87 @@ public final class PlanEngine {
             int rem = Math.max(0, st.totalUnits - r.donePerStage.get(i));
             remainingFolded += (double) rem / st.totalUnits * st.totalPasses;
         }
-        double last7Folded = 0;
-        for (int back = 0; back < 7; back++) {
+        int ageDays = (int) (today.toEpochDay() - planStart.toEpochDay()) + 1;
+        int windowDays = Math.min(7, Math.max(1, ageDays));
+        double lastWinFolded = 0;
+        int progressDays = 0;
+        for (int back = 0; back < windowDays; back++) {
             LocalDate d = today.minusDays(back);
+            double dayFolded = 0;
             for (int i = 0; i < n; i++) {
                 PlanData.Stage st = plan.stages.get(i);
                 if (st.totalUnits <= 0) continue;
                 LocalDate eff = r.effStartPerStage.get(i);
                 if (eff == null || d.isBefore(eff)) continue;
                 int v = provider.doneOn(i, d);
-                if (v != 0) last7Folded += (double) v / st.totalUnits * st.totalPasses;
+                if (v != 0) dayFolded += (double) v / st.totalUnits * st.totalPasses;
             }
+            if (dayFolded > 0) progressDays++;
+            lastWinFolded += dayFolded;
         }
+        boolean insufficient = ageDays < 7 || (windowDays - progressDays) * 2 > windowDays;
         if (r.finished) {
             r.pace = Pace.ON_TRACK;
+            r.paceReliable = true;
             r.predictedFinish = r.completionPerStage.get(n - 1);
-        } else if (last7Folded <= 0) {
+        } else if (lastWinFolded <= 0 || insufficient) {
             r.pace = Pace.ON_TRACK;
+            r.paceReliable = false;
             r.predictedFinish = deadline;
+            r.lateDays = 0;
         } else {
-            double actualDaily = last7Folded / 7.0;
+            double actualDaily = lastWinFolded / windowDays;
             double required = r.remainingDays > 0 ? remainingFolded / r.remainingDays : remainingFolded;
             long daysNeeded = (long) Math.ceil(remainingFolded / actualDaily);
-            r.predictedFinish = today.plusDays(Math.max(0, daysNeeded - 1));
+            LocalDate pf = today.plusDays(Math.max(0, daysNeeded - 1));
+            // 护栏：预计完成日最远不超过「截止日 + 剩余天数」
+            if (r.remainingDays > 0) {
+                LocalDate cap = deadline.plusDays(r.remainingDays);
+                if (pf.isAfter(cap)) pf = cap;
+            }
+            r.predictedFinish = pf;
+            r.paceReliable = true;
             if (required <= 0 || actualDaily >= required * 1.1) r.pace = Pace.FAST;
             else if (actualDaily >= required * 0.9) r.pace = Pace.ON_TRACK;
             else {
                 r.pace = Pace.SLOW;
-                long late = r.predictedFinish.toEpochDay() - deadline.toEpochDay();
+                long late = pf.toEpochDay() - deadline.toEpochDay();
                 r.lateDays = late > 0 ? (int) late : 0;
             }
         }
         return r;
+    }
+
+    /**
+     * v1.23.0：任意阶段的「今日建议量」基准（与 compute() 当前阶段同一公式）：
+     * 分得天数 = 剩余天数 × 本阶段 shareDays ÷ 未完成阶段 shareDays 之和；
+     * 建议 = 本阶段剩余量 ÷ 分得天数四舍五入，章级再化为 K×N 达标线。
+     * 非当前阶段没有引擎今日建议时，手动记录页按此基准整额入账。
+     */
+    public static int stageDailySuggestion(PlanData.Stage st, int doneUnits,
+                                           long unfinishedShareSum, int remainingDays) {
+        int remaining = Math.max(0, st.totalUnits - doneUnits);
+        if (remaining <= 0) return 0;
+        int sugg;
+        if (remainingDays <= 1) {
+            sugg = remaining;
+        } else {
+            double allocDays = unfinishedShareSum > 0
+                    ? (double) remainingDays * Math.max(0, st.shareDays) / unfinishedShareSum : 0;
+            if (allocDays <= 0) sugg = remaining;
+            else sugg = (int) Math.round(remaining / allocDays);
+            if (sugg < 1) sugg = 1;
+            if (sugg > remaining) sugg = remaining;
+        }
+        if (st.isZhang()) {
+            int nn = st.passesPerChapter > 0 ? st.passesPerChapter : 3;
+            int k = (int) Math.ceil((double) sugg / nn);
+            if (k < 1) k = 1;
+            int target = Math.min(k * nn, Math.max(remaining, sugg));
+            if (remaining >= k * nn) target = k * nn;
+            return target;
+        }
+        return sugg;
     }
 
     private PlanEngine() {}

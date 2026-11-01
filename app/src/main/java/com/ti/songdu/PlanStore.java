@@ -144,8 +144,13 @@ public final class PlanStore {
     // ---------- 设置动作 ----------
 
     public synchronized void addManualToday(int stageIndex, int units, LocalDate today) {
-        if (plan == null || units == 0) return;
-        plan.addManual(today.toString(), stageIndex, units);
+        addManualOn(stageIndex, units, today);
+    }
+
+    /** v1.23.0：任意日期手动入账（手动记录页记今天 / 删最近一笔传负数冲销） */
+    public synchronized void addManualOn(int stageIndex, int units, LocalDate date) {
+        if (plan == null || units == 0 || date == null) return;
+        plan.addManual(date.toString(), stageIndex, units);
         save();
     }
 
