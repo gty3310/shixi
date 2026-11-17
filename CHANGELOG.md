@@ -5,7 +5,7 @@
 
 ## [1.28.0] - 2026-11-17
 
-发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.27.0...v1.28.0 · 标签 v1.28.0
+发布提交：210600d · 对比：https://github.com/gty3310/shixi/compare/v1.27.0...v1.28.0 · 标签 v1.28.0
 
 ### 修复
 - 阅读读完弹框四选项自 v1.26 起从未显示：ReaderActivity.Bridge.finishRead 的 AlertDialog 同时 setMessage 与 setItems——Android 的 AlertController 在设有正文（message）时只渲染正文、永不把选项列表（ListView）挂进视图树，列表被创建却静默丢失，用户点底部「已读到末尾 · 点此记一遍」只看到标题＋计数正文那张小卡片（记遍因在弹框前执行、照常 +1）。v1.26 提交 ce3e91a 把三按钮换成 setItems 时原样保留了 setMessage，即为引入点；全 App 仅此一处弹框中招。改法只动弹框构造段：删 setMessage，计数行改由 setCustomTitle 承载（两行 TextView：第一行「已读完一遍」、第二行小字「{track.title} 今日 +1 遍（今日共 {today} 遍）」，信息一字不丢）；setItems 四选项（再读一遍／回到第一页／留在本页／下一章）与各自动作、store.increment 在弹框前执行的记遍时机、finishDialogShowing 置位/复位逻辑全部原样不动；reader.html 不动
@@ -15,8 +15,8 @@
 
 ### 验收
 - 未经模拟器／真机验证（未验先发）：本机 VM 无 KVM、安卓模拟器未能启动，用户 2026-11-17 亲令未验先发（照 v1.26.0 先例）；弹框四选项与标红加重在真机上的呈现待用户验收
-- 代码级验证（待回填）：构建后 dexdump 复查发布 APK 的 finishRead lambda——setMessage 调用消失、setCustomTitle/setItems 在位；node 实跑 reader 模板旗舰句——标红类名不变、包内 reader.html 已为新色值＋粗体；改动面仅 ReaderActivity.java 与 reader.html 两文件，清单数据、遍数／循环／播放逻辑未动
-- aapt badging 与 APK size／sha256／md5（待回填）
+- 代码级验证：构建后 dexdump 复查发布 APK——finishRead 的 runOnUiThread lambda（lambda$finishRead$7）中 setMessage／setTitle 调用已消失，setCustomTitle／setItems／setOnCancelListener／show 各一处在位，两行标题的 TextView.setText 与弹框前的 store.increment 均在，四选项与计数行字符串常量齐备；node 实跑包内 reader.html 的 sentHTML 与 clauseHTML 两条路径渲染旗舰句「如惡惡臭，如好好色，此之謂自謙」，均恰含 3 个 class="gd"（惡 wù、好 hào、謙 qiè，位点与 v1.27 清单一致），包内 CSS 已为新色值＋粗体；改动面仅 ReaderActivity.java 与 reader.html 两文件（另版本/日志/README/WhatsNew 例行项），清单数据、遍数／循环／播放逻辑未动
+- aapt badging 实测 versionCode 52 / versionName 1.28.0；BuildInfo 构建短号＝发布提交 210600d（dex 内实查）；APK size 42964052、sha256 8fd346fdf7a99a44d090009410060f37b1accbc4505dde9f88583176cbf22658、md5 2c9350e8e9436e1a90c11b3b593b8bb8。通道：GitHub Release 下载回读 size/md5/sha256 逐字一致、update.json 内容回读正确；Drive「安装文件」回读 size/md5 一致、旧版已移回收站；Gitee 发行仓已建 Release（id 1320666）并挂 update.json（795 B），但 APK 整件两次流式上传均在约 5 分钟时被网络掐断（RemoteDisconnected）、附件未落地（无残件），App 更新取不到 Gitee 包时自动走 GitHub 兜底、不受影响，补传待办（~/workspace/xiange-release-v1280/gitee_apk_v1280.py 幂等）；v1.27.0 的 Gitee APK 补传亦未成——第三次脱离会话重试以 SSLEOFError 告终、附件列表至今只有 update.json，同列补传待办
 
 ## [1.27.0] - 2026-11-17
 
