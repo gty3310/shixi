@@ -15,6 +15,11 @@ body.fs3 .txt{font-size:30px}
 ruby rt{font-size:.40em;color:#9a8f7d;}
 /* 识读（v1.16.0）：读错的字，其拼音标红（只红拼音、不动字形与句高亮） */
 ruby.rerr rt{color:#B03A2A;font-weight:700;}
+/* 古读标红（v1.27.0）：读音不是现代常用音的字（古读/破读），拼音标朱砂红，
+   只红拼音、字本身不变色；开关在设置「古读标红」，开时 body 带 gdon 类。
+   与识读错字同现时错字样式优先（更深的红＋加粗） */
+body.gdon ruby.gd rt{color:#9E3B2B;}
+body.gdon ruby.gd.rerr rt{color:#B03A2A;font-weight:700;}
 /* 点句标记（v1.16.0）：浅黄/浅绿/浅蓝三色底纹。规则写在 .s.cur 之前——
    当前句的朱砂高亮要盖过标记色，人离开这句标记色自然回来，不会看混 */
 .s.mk1{background:rgba(245,222,140,.38);}
@@ -102,8 +107,9 @@ function sentHTML(s){
   for (const c of text){
     if (isCJK(c)){
       var py = (s.pinyin && pi < s.pinyin.length) ? s.pinyin[pi] : '';
+      var gd = s.gd && s.gd.indexOf(pi) >= 0;
       pi++;
-      out += py ? '<ruby>' + c + '<rt>' + esc(py) + '</rt></ruby>' : c;
+      out += py ? '<ruby' + (gd ? ' class="gd"' : '') + '>' + c + '<rt>' + esc(py) + '</rt></ruby>' : c;
     } else {
       out += esc(c);
     }
@@ -581,8 +587,9 @@ function clauseHTML(s, ranges){
     var c = cps[j];
     if (isCJK(c)){
       var py = (s.pinyin && pi < s.pinyin.length) ? s.pinyin[pi] : '';
+      var gd = s.gd && s.gd.indexOf(pi) >= 0;
       pi++;
-      out += py ? '<ruby>' + c + '<rt>' + esc(py) + '</rt></ruby>' : c;
+      out += py ? '<ruby' + (gd ? ' class="gd"' : '') + '>' + c + '<rt>' + esc(py) + '</rt></ruby>' : c;
     } else out += esc(c);
   }
   return out + '</span>';

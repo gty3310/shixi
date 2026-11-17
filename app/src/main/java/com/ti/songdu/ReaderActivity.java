@@ -118,7 +118,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     // 阅读设置（各自独立持久化）
     private SharedPreferences prefs;
-    private boolean useTrad, pinyinOn, vertical, loopOn;
+    private boolean useTrad, pinyinOn, vertical, loopOn, gdRedOn;
     private int fontIdx;
     /** v1.9.0 注释开关与选定版本（"zhijie" 张居正（默认） / "jizhu" 朱熹 / "gengfu" 耕夫讲经典（v1.20.5）），独立持久化 */
     private boolean notesOn;
@@ -182,6 +182,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         prefs = getSharedPreferences("reader_prefs", MODE_PRIVATE);
         useTrad = prefs.getBoolean("trad", true);
         pinyinOn = prefs.getBoolean("pinyin", true);
+        gdRedOn = prefs.getBoolean("gdRed", true);
         vertical = prefs.getBoolean("vertical", false);
         fontIdx = prefs.getInt("font", 1);
         loopOn = prefs.getBoolean("loop", true);
@@ -692,6 +693,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             String tpl = new String(buf, 0, n, StandardCharsets.UTF_8);
             StringBuilder cls = new StringBuilder("fs").append(fontIdx);
             if (!pinyinOn) cls.append(" nopy");
+            if (gdRedOn) cls.append(" gdon");
             if (vertical) cls.append(" vert");
             if (notesOn) cls.append(" noteson");
             return tpl.replace("__CLASSES__", cls.toString())

@@ -131,6 +131,19 @@ public class SettingsActivity extends Activity {
                 idx -> readerPrefs.edit().putBoolean("pinyin", idx == 0).apply());
         addShowRow(root, "注音", "showPinyinBtn");
 
+        // v1.27.0 古读标红：默认开；与阅读页共用 reader_prefs/gdRed，阅读页打开时读取
+        addSegRow(root, "古读标红", new String[]{"开", "关"},
+                readerPrefs.getBoolean("gdRed", true) ? 0 : 1,
+                idx -> readerPrefs.edit().putBoolean("gdRed", idx == 0).apply());
+        TextView gdHint = new TextView(this);
+        gdHint.setText("开：阅读时把读音不是现代常用音的字（古读、破读，如「好」读 hào、"
+                + "「恶」读 wù）的拼音标成朱砂红，提醒这一处读音和平时不一样；字本身不变色。"
+                + "清单按正音词典逐字核定，《大学》《中庸》《论语》三本都有。跟读时同样标。");
+        gdHint.setTextSize(12);
+        gdHint.setTextColor(getColor(R.color.muted));
+        gdHint.setPadding(dp(2), dp(2), 0, dp(4));
+        root.addView(gdHint);
+
         addSegRow(root, "字号", new String[]{"小", "中", "大", "特大"},
                 clamp(readerPrefs.getInt("font", 1), 0, 3),
                 idx -> readerPrefs.edit().putInt("font", idx).apply());

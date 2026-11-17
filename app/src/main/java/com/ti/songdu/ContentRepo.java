@@ -261,6 +261,8 @@ public class ContentRepo {
             if ("lunyu".equals(bookId)) {
                 try {
                     lunyuDoc = new JSONObject(raw);
+                    // v1.27.0：单篇 rawJson 拼自 lunyuDoc（与 parseBook 独立解析），古读标红也要挂到这份上
+                    attachGdToDoc(ctx, bookId, lunyuDoc);
                 } catch (Exception ignored) {
                 }
             }
@@ -366,7 +368,9 @@ public class ContentRepo {
             // v1.9.0：《大学》《中庸》挂注释（assets/notes/<bookId>_notes.json）；
             // 挂上后把带注的 JSON 重新序列化为 rawJson，阅读页注入即带注。
             // 《论语》与用户导入书无注文件，attachNotes 直接返回 false、零回退。
-            if (attachNotes(ctx, b, sentObjs)) {
+            boolean noted = attachNotes(ctx, b, sentObjs);
+            boolean gded = attachGdMarks(ctx, b.bookId, sentObjs);
+            if (noted || gded) {
                 b.rawJson = o.toString();
             }
             return b;
@@ -411,6 +415,86 @@ public class ContentRepo {
             if (s.id.equals(hit.id)) return Math.max(0, s.startMs);
         }
         return 0;
+    }
+
+    // ---------- v1.27.0 古读标红挂载 ----------
+    // 清单 assets/content/gd/<bookId>.json 由 tools/gen_gd_marks.py 离线生成：
+    // 逐字以书中拼音对正音词典（zhengyin-dict v0.3.1）审计口径判定，读音不是
+    // 现代常用音（多音字不读默认音／非多音字不读唯一现代读音，一/不 变调归一）
+    // 的字位收进 sentences.<句id>.gd（句内汉字序号）；n 是生成时的句内汉字数，
+    // 在此作对账指纹——书库文本日后修订导致句长变化时整句不挂，防错位标红。
+    // 无清单的书（用户导入书等）零回退。开关只管呈现（reader.html 的 gdon 类），
+    // 挂载与开关无关，常开挂载、关呈现时 gd 类不生效。
+
+    private static final java.util.Map<String, JSONObject> GD_CACHE = new java.util.HashMap<>();
+
+    private static JSONObject gdData(Context ctx, String bookId) {
+        if (GD_CACHE.containsKey(bookId)) return GD_CACHE.get(bookId);
+        JSONObject data = null;
+        try {
+            InputStream in = ctx.getAssets().open("content/gd/" + bookId + ".json");
+            byte[] buf = new byte[in.available()];
+            int n = in.read(buf);
+            in.close();
+            if (n > 0) data = new JSONObject(new String(buf, 0, n, StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
+        GD_CACHE.put(bookId, data);
+        return data;
+    }
+
+    /** 句内汉字计数，口径与 reader.html 的 isCJK 一致（拼音按此序逐字对齐） */
+    private static int hanCount(String text) {
+        int n = 0;
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            if ((cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF)
+                    || (cp >= 0x20000 && cp <= 0x323AF)) n++;
+            i += Character.charCount(cp);
+        }
+        return n;
+    }
+
+    private static boolean applyGdToSentence(JSONObject data, JSONObject so) {
+        try {
+            JSONObject sents = data.optJSONObject("sentences");
+            if (sents == null) return false;
+            JSONObject e = sents.optJSONObject(so.optString("id", ""));
+            if (e == null) return false;
+            if (hanCount(so.optString("textS", "")) != e.optInt("n", -1)) return false;
+            JSONArray gd = e.optJSONArray("gd");
+            if (gd == null || gd.length() == 0) return false;
+            so.put("gd", gd);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static boolean attachGdMarks(Context ctx, String bookId, List<JSONObject> sentObjs) {
+        JSONObject data = gdData(ctx, bookId);
+        if (data == null) return false;
+        boolean any = false;
+        for (JSONObject so : sentObjs) {
+            if (applyGdToSentence(data, so)) any = true;
+        }
+        return any;
+    }
+
+    /** 论语整本文档（lunyuDoc）专用：单篇 rawJson 拼自它，与 parseBook 独立解析，故整本逐句挂一份 */
+    private static void attachGdToDoc(Context ctx, String bookId, JSONObject doc) {
+        JSONObject data = gdData(ctx, bookId);
+        if (data == null || doc == null) return;
+        try {
+            JSONArray chs = doc.getJSONArray("chapters");
+            for (int i = 0; i < chs.length(); i++) {
+                JSONArray ss = chs.getJSONObject(i).getJSONArray("sentences");
+                for (int k = 0; k < ss.length(); k++) {
+                    applyGdToSentence(data, ss.getJSONObject(k));
+                }
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     /**
