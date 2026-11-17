@@ -28,7 +28,7 @@ public class ChapterListActivity extends Activity {
     private Store store;
     private ContentRepo.Book book;
     private LinearLayout list;
-    private TextView loopScopeBtn, hint;
+    private TextView loopScopeBtn, hint, wholeCount;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -39,6 +39,9 @@ public class ChapterListActivity extends Activity {
         list = findViewById(R.id.chList);
         loopScopeBtn = findViewById(R.id.chLoopScope);
         hint = findViewById(R.id.chHint);
+        wholeCount = findViewById(R.id.chWholeCount);
+        findViewById(R.id.chWholeMinus).setOnClickListener(v -> adjustWhole(-1));
+        findViewById(R.id.chWholePlus).setOnClickListener(v -> adjustWhole(1));
         findViewById(R.id.chBack).setOnClickListener(v -> finish());
         PlanBooks.BookInfo info = PlanBooks.infoOf(bookId);
         if (info != null) unitName = info.unitName;
@@ -92,9 +95,21 @@ public class ChapterListActivity extends Activity {
         return ts.isEmpty() ? null : ts.get(0);
     }
 
+    /** v1.26.0 整本增减：对每一章各增减 1 遍今日（逐章下限 0），随后整表刷新 */
+    private void adjustWhole(int delta) {
+        if (book == null) return;
+        ChapterStatsStore stats = ChapterStatsStore.get(this);
+        LocalDate today = LocalDate.now();
+        for (int i = 0; i < book.chapters.size(); i++) {
+            stats.adjustChapterToday(bookId, i, today, delta);
+        }
+        buildList();
+    }
+
     private void buildList() {
         list.removeAllViews();
         if (book == null) {
+            if (wholeCount != null) wholeCount.setText("0.0");
             TextView tv = new TextView(this);
             tv.setText("这本书还没下载");
             tv.setTextSize(15);
@@ -104,6 +119,14 @@ public class ChapterListActivity extends Activity {
         }
         ChapterStatsStore stats = ChapterStatsStore.get(this);
         LocalDate today = LocalDate.now();
+        // v1.26.0 页顶整本今日遍数：Σ各章今日 ÷ 章数（BookCountFormat 折算）
+        int sumToday = 0;
+        for (int i = 0; i < book.chapters.size(); i++) {
+            sumToday += stats.chapterToday(bookId, i, today);
+        }
+        if (wholeCount != null) {
+            wholeCount.setText(BookCountFormat.wholeBookToday(sumToday, book.chapters.size()));
+        }
         Track wholeTrack = trackForChapter(0);
         double scale = wholeTrack != null ? ContentRepo.scaleFor(wholeTrack, book) : 1.0;
         for (int i = 0; i < book.chapters.size(); i++) {
@@ -187,6 +210,18 @@ public class ChapterListActivity extends Activity {
                 buildList();
             });
             actions.addView(btnAdd);
+            TextView btnMinus = actionBtn("−");
+            btnMinus.setOnClickListener(v -> {
+                ChapterStatsStore.get(this).adjustChapterToday(bookId, idx, LocalDate.now(), -1);
+                buildList();
+            });
+            actions.addView(btnMinus);
+            TextView btnPlus = actionBtn("＋");
+            btnPlus.setOnClickListener(v -> {
+                ChapterStatsStore.get(this).adjustChapterToday(bookId, idx, LocalDate.now(), 1);
+                buildList();
+            });
+            actions.addView(btnPlus);
             card.addView(actions);
             list.addView(card);
         }

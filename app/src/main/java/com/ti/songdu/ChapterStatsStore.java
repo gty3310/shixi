@@ -59,6 +59,41 @@ public final class ChapterStatsStore {
         }
     }
 
+    /**
+     * v1.26.0 手动增减某章今日遍数：以今日合计（a+m）为口径、下限 0（与
+     * MainActivity.adjustToday 惯例一致）；增加入 m 路；减少先扣 m 的正数
+     * 部分、不足再扣 a；落盘与条目清理仿 add()。
+     */
+    public synchronized void adjustChapterToday(String bookId, int idx, LocalDate date, int delta) {
+        if (bookId == null || idx < 0 || delta == 0) return;
+        try {
+            String k = key(bookId, idx, date);
+            JSONObject e = root.optJSONObject(k);
+            if (e == null) e = new JSONObject();
+            int a = e.optInt("a", 0);
+            int m = e.optInt("m", 0);
+            int cur = a + m;
+            int next = Math.max(0, cur + delta);
+            int diff = next - cur;
+            if (diff == 0) return;
+            if (diff > 0) {
+                m += diff;
+            } else {
+                int cut = -diff;
+                int fromM = Math.min(Math.max(m, 0), cut);
+                m -= fromM;
+                cut -= fromM;
+                a -= cut;
+            }
+            e.put("a", a);
+            e.put("m", m);
+            if (a <= 0 && m <= 0) root.remove(k);
+            else root.put(k, e);
+            save();
+        } catch (Exception ignored) {
+        }
+    }
+
     private int entryVal(String k, String field) {
         JSONObject e = root.optJSONObject(k);
         return e == null ? 0 : e.optInt(field, 0);
