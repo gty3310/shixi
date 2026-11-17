@@ -142,10 +142,11 @@ public class ContentRepo {
         if (bid == null) return null;
         if (!"lunyu".equals(bid)) {
             // v1.17.0：双声音书的预置曲目按已选声音取时间轴（AI 书加载失败回退原声）
-            if (VoicePref.VOICE_AI.equals(VoicePref.getVoice(ctx, bid))
-                    && VoicePref.appliesTo(ctx, t)) {
-                Book ai = loadAi(ctx, bid);
-                if (ai != null) return ai;
+            // v1.25.0：泛化到第三声 aizz（正音版），同一分发
+            String selVoice = VoicePref.getVoice(ctx, bid);
+            if (VoicePref.isAssetVoice(selVoice) && VoicePref.appliesTo(ctx, t)) {
+                Book vb = loadVoice(ctx, bid, selVoice);
+                if (vb != null) return vb;
             }
             return load(ctx, bid);
         }
@@ -215,6 +216,7 @@ public class ContentRepo {
     public static synchronized void invalidate(String bookId) {
         CACHE.remove(bookId);
         CACHE.remove(bookId + "#ai"); // v1.17.0：AI 时间轴缓存一并失效
+        CACHE.remove(bookId + "#aizz"); // v1.25.0：正音版时间轴缓存一并失效
         if ("lunyu".equals(bookId)) lunyuDoc = null;
     }
 
@@ -277,12 +279,23 @@ public class ContentRepo {
      * 分开；解析与挂注走 parseBook 同一套（句 id 相同，注释照常挂得上）。
      */
     public static synchronized Book loadAi(Context ctx, String bookId) {
-        if (bookId == null) return null;
-        String key = bookId + "#ai";
+        return loadVoice(ctx, bookId, VoicePref.VOICE_AI);
+    }
+
+    /** v1.25.0 正音版时间轴：assets/audio_ai/<bookId>_aizz.json，同构同句 id */
+    public static synchronized Book loadAizz(Context ctx, String bookId) {
+        return loadVoice(ctx, bookId, VoicePref.VOICE_AIZZ);
+    }
+
+    /** v1.25.0 按声音加载 assets 时间轴（ai / aizz 共用本体，缓存键按声音分开） */
+    public static synchronized Book loadVoice(Context ctx, String bookId, String voice) {
+        if (bookId == null || !VoicePref.isAssetVoice(voice)) return null;
+        String suffix = VoicePref.VOICE_AIZZ.equals(voice) ? "aizz" : "ai";
+        String key = bookId + "#" + suffix;
         Book cached = CACHE.get(key);
         if (cached != null) return cached;
         try {
-            InputStream in = ctx.getAssets().open("audio_ai/" + bookId + "_ai.json");
+            InputStream in = ctx.getAssets().open("audio_ai/" + bookId + "_" + suffix + ".json");
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
             byte[] tmp = new byte[8192];
             int n;
@@ -290,7 +303,7 @@ public class ContentRepo {
             in.close();
             Book b = parseBook(ctx, new String(bos.toByteArray(), StandardCharsets.UTF_8));
             if (b == null) return null;
-            b.voice = VoicePref.VOICE_AI;
+            b.voice = voice;
             CACHE.put(key, b);
             return b;
         } catch (Exception e) {
@@ -371,9 +384,9 @@ public class ContentRepo {
         String bid = bookIdFor(t);
         if (bid == null) return null;
         if ("lunyu".equals(bid)) return bookForTrack(ctx, t);
-        if (VoicePref.VOICE_AI.equals(voice) && VoicePref.appliesTo(ctx, t)) {
-            Book ai = loadAi(ctx, bid);
-            if (ai != null) return ai;
+        if (VoicePref.isAssetVoice(voice) && VoicePref.appliesTo(ctx, t)) {
+            Book vb = loadVoice(ctx, bid, voice);
+            if (vb != null) return vb;
         }
         return load(ctx, bid);
     }
@@ -494,7 +507,7 @@ public class ContentRepo {
      *  不拿曲目的原声时长去除 */
     public static double scaleFor(Track t, Book b) {
         if (t == null || b == null || b.audioDurationMs <= 0 || t.durationMs <= 0) return 1.0;
-        if (VoicePref.VOICE_AI.equals(b.voice)) return 1.0;
+        if (VoicePref.isAssetVoice(b.voice)) return 1.0;
         return (double) t.durationMs / (double) b.audioDurationMs;
     }
 }

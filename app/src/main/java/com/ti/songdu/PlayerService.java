@@ -1253,7 +1253,8 @@ public class PlayerService extends Service {
     private void setDataSourceFor(MediaPlayer p, Track t) throws Exception {
         if (useAiAudio(t)) {
             String bid = ContentRepo.bookIdFor(t);
-            AssetFileDescriptor afd = getAssets().openFd(VoicePref.aiAudioAsset(bid));
+            AssetFileDescriptor afd = getAssets().openFd(
+                    VoicePref.voiceAudioAsset(bid, VoicePref.getVoice(this, bid)));
             try {
                 p.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
             } finally {
@@ -1268,11 +1269,18 @@ public class PlayerService extends Service {
         }
     }
 
-    /** v1.17.0 这条曲目当下应播 AI 音轨否：双声音预置曲目且偏好已选 AI */
+    /** v1.17.0 这条曲目当下应播 AI 音轨否：双声音预置曲目且偏好已选 AI
+     *  v1.25.0：泛化——偏好为任一 assets 声音（ai / aizz 正音版）都走 assets 音轨 */
     private boolean useAiAudio(Track t) {
         return t != null && VoicePref.appliesTo(this, t)
-                && VoicePref.VOICE_AI.equals(
+                && VoicePref.isAssetVoice(
                         VoicePref.getVoice(this, ContentRepo.bookIdFor(t)));
+    }
+
+    /** v1.25.0 这条曲目当下应播的 assets 声音（非 assets 声音返回 orig） */
+    private String assetVoiceFor(Track t) {
+        if (!useAiAudio(t)) return VoicePref.VOICE_ORIG;
+        return VoicePref.getVoice(this, ContentRepo.bookIdFor(t));
     }
 
     /** v1.17.0 当前播放口径的总时长：播 AI 音轨时是 AI 书的基准时长，
@@ -1280,7 +1288,8 @@ public class PlayerService extends Service {
     public long effDurationMs() {
         if (current == null) return 0;
         if (useAiAudio(current)) {
-            ContentRepo.Book b = ContentRepo.loadAi(this, ContentRepo.bookIdFor(current));
+            ContentRepo.Book b = ContentRepo.loadVoice(this, ContentRepo.bookIdFor(current),
+                    assetVoiceFor(current));
             if (b != null && b.audioDurationMs > 0) return b.audioDurationMs;
         }
         return current.durationMs;
@@ -1412,7 +1421,7 @@ public class PlayerService extends Service {
         current = t;
         playing = false;
         // v1.17.0：本次装载的声音定下来（数据源与 onPrepared 的位置对账都看它）
-        activeVoice = useAiAudio(t) ? VoicePref.VOICE_AI : VoicePref.VOICE_ORIG;
+        activeVoice = assetVoiceFor(t);
         holdAfterPrepare = false;
         // v1.4.3：切歌复位跟读（新曲有原文则播起来后自动接上，无原文自动关）
         resetFollowForNewTrack();

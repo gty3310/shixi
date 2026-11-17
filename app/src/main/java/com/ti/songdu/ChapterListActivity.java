@@ -44,10 +44,12 @@ public class ChapterListActivity extends Activity {
         if (info != null) unitName = info.unitName;
         TextView title = findViewById(R.id.chTitle);
         book = bookId != null ? ContentRepo.load(this, bookId) : null;
-        // 双声音书已选 AI 朗读时，章界与起播位置走 AI 时间轴（与 PlayerService 同口径）
-        if (book != null && VoicePref.VOICE_AI.equals(VoicePref.getVoice(this, bookId))) {
-            ContentRepo.Book ai = ContentRepo.loadAi(this, bookId);
-            if (ai != null) book = ai;
+        // 双声音书已选 AI 声音时，章界与起播位置走该声音时间轴（与 PlayerService 同口径）
+        // v1.25.0：泛化到正音版 aizz
+        if (book != null && VoicePref.isAssetVoice(VoicePref.getVoice(this, bookId))) {
+            ContentRepo.Book vb = ContentRepo.loadVoice(this, bookId,
+                    VoicePref.getVoice(this, bookId));
+            if (vb != null) book = vb;
         }
         String t = info != null ? info.title : (book != null ? book.title : bookId);
         title.setText("《" + t + "》 · " + unitName);

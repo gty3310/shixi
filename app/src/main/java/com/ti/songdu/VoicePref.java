@@ -25,6 +25,8 @@ public final class VoicePref {
 
     public static final String VOICE_ORIG = "orig";
     public static final String VOICE_AI = "ai";
+    /** v1.25.0 第三声：AI 朗读·正音版（仅《大学》有资产 daxue_aizz.mp3/json） */
+    public static final String VOICE_AIZZ = "aizz";
 
     private static final String PREFS = "voice_prefs";
     private static final String KEY_VOICE = "voice_pref_";
@@ -32,6 +34,8 @@ public final class VoicePref {
 
     /** assets/audio_ai 下有成套双声音资产的 bookId 集合（进程内算一次） */
     private static Set<String> dualBooks;
+    /** v1.25.0 assets/audio_ai 下有成套正音版资产的 bookId 集合 */
+    private static Set<String> aizzBooks;
 
     private VoicePref() {
     }
@@ -55,12 +59,44 @@ public final class VoicePref {
                             String bid = n.substring(0, n.length() - "_ai.json".length());
                             if (files.contains(bid + "_ai.mp3")) dualBooks.add(bid);
                         }
+                        if (n.endsWith("_aizz.json")) {
+                            String bid = n.substring(0, n.length() - "_aizz.json".length());
+                            if (files.contains(bid + "_aizz.mp3")) dualBooks.add(bid);
+                        }
                     }
                 }
             } catch (Exception ignored) {
             }
         }
         return dualBooks.contains(bookId);
+    }
+
+    /** v1.25.0 该书是否有正音版资产（audio_ai/<bookId>_aizz.mp3 与 _aizz.json 成套） */
+    public static synchronized boolean hasAizzVoice(Context ctx, String bookId) {
+        if (bookId == null) return false;
+        if (aizzBooks == null) {
+            aizzBooks = new HashSet<>();
+            try {
+                String[] names = ctx.getAssets().list("audio_ai");
+                if (names != null) {
+                    Set<String> files = new HashSet<>();
+                    for (String n : names) files.add(n);
+                    for (String n : names) {
+                        if (n.endsWith("_aizz.json")) {
+                            String bid = n.substring(0, n.length() - "_aizz.json".length());
+                            if (files.contains(bid + "_aizz.mp3")) aizzBooks.add(bid);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return aizzBooks.contains(bookId);
+    }
+
+    /** 是否为 assets 音轨声音（AI 朗读 / AI 朗读·正音版） */
+    public static boolean isAssetVoice(String voice) {
+        return VOICE_AI.equals(voice) || VOICE_AIZZ.equals(voice);
     }
 
     /** 该书的预置曲目 id（双声音只挂在这条曲目上）；无预置曲目约定的书返回 null */
@@ -88,7 +124,7 @@ public final class VoicePref {
     public static String getVoice(Context ctx, String bookId) {
         if (bookId == null) return null;
         String v = prefs(ctx).getString(KEY_VOICE + bookId, null);
-        return (VOICE_ORIG.equals(v) || VOICE_AI.equals(v)) ? v : null;
+        return (VOICE_ORIG.equals(v) || VOICE_AI.equals(v) || VOICE_AIZZ.equals(v)) ? v : null;
     }
 
     public static void setVoice(Context ctx, String bookId, String voice) {
@@ -105,7 +141,7 @@ public final class VoicePref {
     public static String getPosVoice(Context ctx, String bookId) {
         if (bookId == null) return VOICE_ORIG;
         String v = prefs(ctx).getString(KEY_POS_VOICE + bookId, VOICE_ORIG);
-        return VOICE_AI.equals(v) ? VOICE_AI : VOICE_ORIG;
+        return isAssetVoice(v) ? v : VOICE_ORIG;
     }
 
     public static void setPosVoice(Context ctx, String bookId, String voice) {
@@ -115,12 +151,25 @@ public final class VoicePref {
 
     /** 声音的展示名（选声页/设置页共用） */
     public static String voiceName(String voice) {
+        if (VOICE_AIZZ.equals(voice)) return "AI 朗读·正音版";
         return VOICE_AI.equals(voice) ? "AI 朗读" : "法师原声";
     }
 
     /** AI 音轨在 assets 中的路径 */
     public static String aiAudioAsset(String bookId) {
         return "audio_ai/" + bookId + "_ai.mp3";
+    }
+
+    /** v1.25.0 正音版音轨在 assets 中的路径 */
+    public static String aizzAudioAsset(String bookId) {
+        return "audio_ai/" + bookId + "_aizz.mp3";
+    }
+
+    /** v1.25.0 按声音取 assets 音轨路径（orig 无 assets 音轨，返回 null） */
+    public static String voiceAudioAsset(String bookId, String voice) {
+        if (VOICE_AIZZ.equals(voice)) return aizzAudioAsset(bookId);
+        if (VOICE_AI.equals(voice)) return aiAudioAsset(bookId);
+        return null;
     }
 
     /** 校验 assets 里 AI 音轨可经 openFd 读取（未压缩存储）；仅供排查，失败返回 false */

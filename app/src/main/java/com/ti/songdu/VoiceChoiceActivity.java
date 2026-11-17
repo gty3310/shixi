@@ -50,6 +50,7 @@ public class VoiceChoiceActivity extends Activity {
     private String previewVoice;
     private TextView btnPreviewOrig;
     private TextView btnPreviewAi;
+    private TextView btnPreviewAizz;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable previewStopper = this::stopPreview;
 
@@ -101,8 +102,9 @@ public class VoiceChoiceActivity extends Activity {
         title.setTextColor(getColor(R.color.ink));
         root.addView(title);
 
+        boolean hasAizz = VoicePref.hasAizzVoice(this, bookId);
         TextView hint = new TextView(this);
-        hint.setText("这本书有两个声音。先试听，再选一个；选好会记住，"
+        hint.setText("这本书有" + (hasAizz ? "三个" : "两个") + "声音。先试听，再选一个；选好会记住，"
                 + "以后点播放直接播。想换时到「设置 → 朗读声音」里重选。");
         hint.setTextSize(13);
         hint.setTextColor(getColor(R.color.muted));
@@ -114,6 +116,11 @@ public class VoiceChoiceActivity extends Activity {
                 "法师诵读的原版录音", VoicePref.VOICE_ORIG.equals(cur)));
         root.addView(optionCard(VoicePref.VOICE_AI, "AI 朗读",
                 "AI 合成的朗读声音", VoicePref.VOICE_AI.equals(cur)));
+        if (hasAizz) {
+            root.addView(optionCard(VoicePref.VOICE_AIZZ, "AI 朗读·正音版",
+                    "正音版：读音经字典逐字核验的文本合成",
+                    VoicePref.VOICE_AIZZ.equals(cur)));
+        }
 
         TextView back = new TextView(this);
         back.setText("← 返回");
@@ -178,6 +185,7 @@ public class VoiceChoiceActivity extends Activity {
         pv.setOnClickListener(v -> togglePreview(voice));
         card.addView(pv);
         if (VoicePref.VOICE_ORIG.equals(voice)) btnPreviewOrig = pv;
+        else if (VoicePref.VOICE_AIZZ.equals(voice)) btnPreviewAizz = pv;
         else btnPreviewAi = pv;
 
         card.setOnClickListener(v -> choose(voice));
@@ -213,6 +221,11 @@ public class VoiceChoiceActivity extends Activity {
             btnPreviewAi.setText(on ? "停止" : "试听");
             stylePreviewPill(btnPreviewAi, on);
         }
+        if (btnPreviewAizz != null) {
+            boolean on = VoicePref.VOICE_AIZZ.equals(previewVoice);
+            btnPreviewAizz.setText(on ? "停止" : "试听");
+            stylePreviewPill(btnPreviewAizz, on);
+        }
     }
 
     /** 试听开关：正在播这个声音 → 停；否则换到这个声音从头播约 15 秒 */
@@ -224,8 +237,9 @@ public class VoiceChoiceActivity extends Activity {
         stopPreview();
         try {
             MediaPlayer mp = new MediaPlayer();
-            if (VoicePref.VOICE_AI.equals(voice)) {
-                AssetFileDescriptor afd = getAssets().openFd(VoicePref.aiAudioAsset(bookId));
+            if (VoicePref.isAssetVoice(voice)) {
+                AssetFileDescriptor afd = getAssets().openFd(
+                        VoicePref.voiceAudioAsset(bookId, voice));
                 try {
                     mp.setDataSource(afd.getFileDescriptor(),
                             afd.getStartOffset(), afd.getLength());
