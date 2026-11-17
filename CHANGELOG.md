@@ -3,6 +3,21 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.26.0] - 2026-11-17
+
+发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.25.0...v1.26.0 · 标签 v1.26.0
+
+### 修复
+- 全本循环失效（多曲目书每篇同篇重播）：根因是普通整本播放整轨播完走 CompletionPolicy.decide(loopEnabled, hasNextPlayable)，decide 无循环范围参数、循环开一律 RESTART，论语 20 篇每篇播完同篇重播。CompletionPolicy 新增纯逻辑 loopTarget(scopeChapter, hasNextInBook, multiTrackBook)：单章范围→RESTART_SELF、整书＋有下一曲→NEXT_IN_BOOK、整书＋书末＋多曲目→FIRST_OF_BOOK、整书＋书末＋单曲目或无书→RESTART_SELF；decide() 与 chapterBoundary() 一字不动。PlayerService 新增本书内助手 nextTrackInBook／firstTrackOfBook／currentBookMultiTrack（PlanBooks.bookIdOfTrackFull／tracksOfBook 口径，下一曲或首曲未选声 needsChoice 时返回 null），onCompletion 末尾与 finishFollowPass 两处 decide 开关同改：循环开改走 loopTarget（NEXT_IN_BOOK→playTrack 下一曲；FIRST_OF_BOOK→playTrack 书首曲、为 null 回退 replayFromStart；RESTART_SELF→replayFromStart），循环关保持原 decide 开关一字不动；两处开关之前的计数、chapterPlayback 分支与章界路径一律不动。听读并行双层循环口径随之成立：单章循环章末自动回绕不需点已读完、整书循环读完自动回书首、阅读模式不阻碍播放循环
+
+### 新增
+- 阅读模式「下一章」：ReaderActivity.finishRead 弹框由三按钮改选项列表（标题「已读完一遍」与文案不变、计数仍在弹框前完成），前三项「再读一遍／回到第一页／留在本页」行为不变（前两项 goTop、第三项仅关框）；仅当所属书内下一曲存在且 ContentRepo.hasContent 时追加第四项「下一章」，点之打开下一曲阅读页并 finish 当前页——单曲目书（大学／中庸，整书即一曲）与全书最后一篇均无此项
+- 分章书遍数：ChapterStatsStore 新增 adjustChapterToday（今日合计 a+m 口径、下限 0 与 MainActivity.adjustToday 惯例一致，增入 m、减先扣 m 正数部分不足再扣 a，落盘与条目清理仿 add）；新纯逻辑类 BookCountFormat.wholeBookToday（Σ各章今日 ÷ 章数、BigDecimal 一位小数 HALF_UP，章数≤0 返回 "0.0"）；章列表页顶加今日整本大号遍数（28sp 加粗墨色）＋「今日整本」标签＋整本 −／＋ 小钮（整本 ±1 ＝逐章各 ±1、逐章下限 0），每张章卡片动作行加本章 −／＋ 小钮，均点后 buildList 刷新（页顶数字在 buildList 内按 Σ各章今日 ÷ 章数一并刷新）；既有「补记 +1 遍」等按钮与文案不动
+
+### 验收
+- 桌面 harness：CompletionHarness 13 项全过（原 decide 4 项不回退＋loopTarget 全组合 9 项：单章恒 RESTART_SELF、整书有下一曲 NEXT_IN_BOOK、书末多曲目 FIRST_OF_BOOK、书末单曲目与无书 RESTART_SELF）；BookCountHarness 11 例全过（(1,20)→0.1、(7,20)→0.4、(8,20)→0.4、(9,20)→0.5、(10,20)→0.5、(0,20)→0.0、(20,20)→1.0、(21,20)→1.1、(1,30)→0.0、(15,30)→0.5、(2,30)→0.1）
+- aapt badging 与 APK 校验、模拟器／真机验收：待构建与协调者复核后回填（本版按分工未上模拟器、未打标签未推送）
+
 ## [1.25.0] - 2026-11-17
 
 发布提交：4c2f63c · 对比：https://github.com/gty3310/shixi/compare/v1.24.0...v1.25.0 · 标签 v1.25.0
