@@ -47,4 +47,4 @@ Shixi is an AI reader built for mastering classical texts through recitation, st
 
 ## 版本 Version
 
-当前版本 v1.25.0。v1.25.0：《大学》新增第三个声音「AI 朗读·正音版」——法师原声与原来的 AI 朗读都保留，选声页多一个选项，切换时位置照样按句对得上；正音版只在《大学》出现。如实说明：本轨由正音终检过的纯文本版合成，SSML 钉音经小样实测未被该音色执行、故走纯文本兜底，160 处钉音在音频里无锁、由引擎按语境读，属已知残余风险。上一版 v1.24.0 的应用内更新自动下载等功能全部保留：更新走双源，Gitee 发行仓 xiange-releases 优先、GitHub Releases 兜底，清单 update.json 同挂两边。本项目以 CC BY-NC-SA 4.0 许可共享（见仓库根目录 LICENSE）。
+当前版本 v1.26.0。v1.26.0：修复全本循环——分章书（如《论语》）开整书循环时逐篇接续、书末自动回书首，不再同篇重播；阅读模式「读完章节」弹框加第四项「下一章」；分章书章列表页顶加今日整本遍数（各章今日遍数之和÷章数、显示一位小数），整本与每章均可增减遍数。如实说明：本版含 bug 修复，但未经模拟器／真机验证——本机 VM 无 KVM、安卓模拟器未能启动，用户 2026-11-17 亲令未验先发；已完成的验证仅代码审查＋两套纯逻辑 harness（CompletionHarness 13 项、BookCountHarness 11 例，全过），全本循环、「下一章」、分章遍数的行为层待用户真机验收。上一版 v1.25.0 的《大学》「AI 朗读·正音版」等功能全部保留：更新走双源，Gitee 发行仓 xiange-releases 优先、GitHub Releases 兜底，清单 update.json 同挂两边。本项目以 CC BY-NC-SA 4.0 许可共享（见仓库根目录 LICENSE）。

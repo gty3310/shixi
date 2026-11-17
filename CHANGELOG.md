@@ -5,7 +5,7 @@
 
 ## [1.26.0] - 2026-11-17
 
-发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.25.0...v1.26.0 · 标签 v1.26.0
+发布提交：32a63f4 · 对比：https://github.com/gty3310/shixi/compare/v1.25.0...v1.26.0 · 标签 v1.26.0
 
 ### 修复
 - 全本循环失效（多曲目书每篇同篇重播）：根因是普通整本播放整轨播完走 CompletionPolicy.decide(loopEnabled, hasNextPlayable)，decide 无循环范围参数、循环开一律 RESTART，论语 20 篇每篇播完同篇重播。CompletionPolicy 新增纯逻辑 loopTarget(scopeChapter, hasNextInBook, multiTrackBook)：单章范围→RESTART_SELF、整书＋有下一曲→NEXT_IN_BOOK、整书＋书末＋多曲目→FIRST_OF_BOOK、整书＋书末＋单曲目或无书→RESTART_SELF；decide() 与 chapterBoundary() 一字不动。PlayerService 新增本书内助手 nextTrackInBook／firstTrackOfBook／currentBookMultiTrack（PlanBooks.bookIdOfTrackFull／tracksOfBook 口径，下一曲或首曲未选声 needsChoice 时返回 null），onCompletion 末尾与 finishFollowPass 两处 decide 开关同改：循环开改走 loopTarget（NEXT_IN_BOOK→playTrack 下一曲；FIRST_OF_BOOK→playTrack 书首曲、为 null 回退 replayFromStart；RESTART_SELF→replayFromStart），循环关保持原 decide 开关一字不动；两处开关之前的计数、chapterPlayback 分支与章界路径一律不动。听读并行双层循环口径随之成立：单章循环章末自动回绕不需点已读完、整书循环读完自动回书首、阅读模式不阻碍播放循环
@@ -17,7 +17,7 @@
 ### 验收
 - 桌面 harness：CompletionHarness 13 项全过（原 decide 4 项不回退＋loopTarget 全组合 9 项：单章恒 RESTART_SELF、整书有下一曲 NEXT_IN_BOOK、书末多曲目 FIRST_OF_BOOK、书末单曲目与无书 RESTART_SELF）；BookCountHarness 11 例全过（(1,20)→0.1、(7,20)→0.4、(8,20)→0.4、(9,20)→0.5、(10,20)→0.5、(0,20)→0.0、(20,20)→1.0、(21,20)→1.1、(1,30)→0.0、(15,30)→0.5、(2,30)→0.1）
 - 未经模拟器／真机验证（未验先发）：本机 VM 无 KVM、安卓模拟器 TCG 软件模拟未能启动（等待窗已过、无启动成功证据），用户 2026-11-17 亲令未验先发，照知行 v1.87.0／v1.88.0 未验先发先例；已完成的验证仅代码审查＋上述两套纯逻辑 harness（13＋11 项），全本循环、「下一章」、分章遍数的行为层待用户真机验收
-- aapt badging 与 APK 校验：构建后回填
+- aapt badging 实测 versionCode 50 / versionName 1.26.0，包内含识读原生库（libsherpa-onnx-jni.so、libonnxruntime.so）与《大学》正音版音轨资产（daxue_aizz.mp3／.json）；BuildInfo 构建短号＝发布提交 32a63f4（dex 内实查）；APK size 42959730、sha256 b3b42677309ca136572f326f7219d07138ccba7cf71af73306a49cdf6b26243e、md5 2d2a1c827ba972f918a86bf98de59685
 
 ## [1.25.0] - 2026-11-17
 
