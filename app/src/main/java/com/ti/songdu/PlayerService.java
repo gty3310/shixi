@@ -882,16 +882,36 @@ public class PlayerService extends Service {
         // 循环关→自动接可接的下一本（playTrack 内部已复位跟读状态机、无原文则
         // 自动关跟读）；没有可接的才停，跟读开关保持开
         replayRetryUsed = false;
-        switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
-            case ADVANCE:
-                advanceToNextTrack();
-                break;
-            case STOP:
-                playing = false;
-                break;
-            default: // RESTART
-                replayFromStart();
-                break;
+        if (loopEnabled) {
+            // v1.26.0：循环开走 loopTarget 整本口径（单章范围回本曲、整书范围接
+            // 本书下一曲、书末回书首、单曲目书回本曲）；计数已在上方完成
+            Track nextInBook = nextTrackInBook();
+            switch (CompletionPolicy.loopTarget(loopScopeChapter, nextInBook != null, currentBookMultiTrack())) {
+                case NEXT_IN_BOOK:
+                    playTrack(nextInBook);
+                    break;
+                case FIRST_OF_BOOK: {
+                    Track first = firstTrackOfBook();
+                    if (first != null) playTrack(first);
+                    else replayFromStart();
+                    break;
+                }
+                default: // RESTART_SELF
+                    replayFromStart();
+                    break;
+            }
+        } else {
+            switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
+                case ADVANCE:
+                    advanceToNextTrack();
+                    break;
+                case STOP:
+                    playing = false;
+                    break;
+                default: // RESTART
+                    replayFromStart();
+                    break;
+            }
         }
         updateNotification();
         notifyState();
@@ -1031,6 +1051,45 @@ public class PlayerService extends Service {
             }
         }
         return null;
+    }
+
+    // ---------- v1.26.0 整本循环：本书内去向 ----------
+
+    /** 当前曲目在所属书内的下一曲；无书／书末／下一曲未选声时返回 null（口径同 nextPlayableTrack） */
+    private Track nextTrackInBook() {
+        if (current == null || store == null) return null;
+        String bid = PlanBooks.bookIdOfTrackFull(current);
+        if (bid == null) return null;
+        java.util.List<Track> ts = PlanBooks.tracksOfBook(store, bid);
+        for (int i = 0; i < ts.size(); i++) {
+            if (ts.get(i).id.equals(current.id)) {
+                if (i + 1 >= ts.size()) return null;
+                Track next = ts.get(i + 1);
+                if (VoicePref.needsChoice(this, next)) return null;
+                return next;
+            }
+        }
+        return null;
+    }
+
+    /** 当前曲目所属书的首曲；无书／无曲目／首曲未选声时返回 null */
+    private Track firstTrackOfBook() {
+        if (current == null || store == null) return null;
+        String bid = PlanBooks.bookIdOfTrackFull(current);
+        if (bid == null) return null;
+        java.util.List<Track> ts = PlanBooks.tracksOfBook(store, bid);
+        if (ts.isEmpty()) return null;
+        Track first = ts.get(0);
+        if (VoicePref.needsChoice(this, first)) return null;
+        return first;
+    }
+
+    /** 当前曲目所属书是否多曲目（无书为 false） */
+    private boolean currentBookMultiTrack() {
+        if (current == null || store == null) return false;
+        String bid = PlanBooks.bookIdOfTrackFull(current);
+        if (bid == null) return false;
+        return PlanBooks.tracksOfBook(store, bid).size() > 1;
     }
 
     /**
@@ -1222,16 +1281,36 @@ public class PlayerService extends Service {
             // 同一判定）：循环开→计数后从头重播；循环关→自动接可接的下一本
             // （v1.14.1 口径，接不上才停）。计数已在上方完成，不与去向互相牺牲。
             replayRetryUsed = false;
-            switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
-                case ADVANCE:
-                    advanceToNextTrack();
-                    break;
-                case STOP:
-                    playing = false;
-                    break;
-                default: // RESTART
-                    replayFromStart();
-                    break;
+            if (loopEnabled) {
+                // v1.26.0：循环开走 loopTarget 整本口径（单章范围回本曲、整书范围
+                // 接本书下一曲、书末回书首、单曲目书回本曲）；计数已在上方完成
+                Track nextInBook = nextTrackInBook();
+                switch (CompletionPolicy.loopTarget(loopScopeChapter, nextInBook != null, currentBookMultiTrack())) {
+                    case NEXT_IN_BOOK:
+                        playTrack(nextInBook);
+                        break;
+                    case FIRST_OF_BOOK: {
+                        Track first = firstTrackOfBook();
+                        if (first != null) playTrack(first);
+                        else replayFromStart();
+                        break;
+                    }
+                    default: // RESTART_SELF
+                        replayFromStart();
+                        break;
+                }
+            } else {
+                switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
+                    case ADVANCE:
+                        advanceToNextTrack();
+                        break;
+                    case STOP:
+                        playing = false;
+                        break;
+                    default: // RESTART
+                        replayFromStart();
+                        break;
+                }
             }
             updateNotification();
             notifyState();

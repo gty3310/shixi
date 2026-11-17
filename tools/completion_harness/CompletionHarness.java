@@ -34,6 +34,27 @@ public class CompletionHarness {
         check("loop off, no next -> STOP",
                 CompletionPolicy.decide(false, false) == CompletionPolicy.Action.STOP);
 
+        // v1.26.0 loopTarget 全组合：单章范围恒回本曲；整书范围有下一曲接下一曲、
+        // 书末多曲目回书首、书末单曲目回本曲；无书时调用方传 (false, false) 同单曲目口径
+        check("loopTarget chapter scope, has next, multi -> RESTART_SELF",
+                CompletionPolicy.loopTarget(true, true, true) == CompletionPolicy.LoopTarget.RESTART_SELF);
+        check("loopTarget chapter scope, has next, single -> RESTART_SELF",
+                CompletionPolicy.loopTarget(true, true, false) == CompletionPolicy.LoopTarget.RESTART_SELF);
+        check("loopTarget chapter scope, book end, multi -> RESTART_SELF",
+                CompletionPolicy.loopTarget(true, false, true) == CompletionPolicy.LoopTarget.RESTART_SELF);
+        check("loopTarget chapter scope, book end, single -> RESTART_SELF",
+                CompletionPolicy.loopTarget(true, false, false) == CompletionPolicy.LoopTarget.RESTART_SELF);
+        check("loopTarget book scope, has next, multi -> NEXT_IN_BOOK",
+                CompletionPolicy.loopTarget(false, true, true) == CompletionPolicy.LoopTarget.NEXT_IN_BOOK);
+        check("loopTarget book scope, has next, single-flag -> NEXT_IN_BOOK",
+                CompletionPolicy.loopTarget(false, true, false) == CompletionPolicy.LoopTarget.NEXT_IN_BOOK);
+        check("loopTarget book scope, book end, multi -> FIRST_OF_BOOK",
+                CompletionPolicy.loopTarget(false, false, true) == CompletionPolicy.LoopTarget.FIRST_OF_BOOK);
+        check("loopTarget book scope, book end, single -> RESTART_SELF",
+                CompletionPolicy.loopTarget(false, false, false) == CompletionPolicy.LoopTarget.RESTART_SELF);
+        check("loopTarget book scope, no book (hasNext=false, multi=false) -> RESTART_SELF",
+                CompletionPolicy.loopTarget(false, false, false) == CompletionPolicy.LoopTarget.RESTART_SELF);
+
         System.out.println("CompletionHarness: " + passed + " passed, " + failed + " failed");
         if (failed > 0) System.exit(1);
     }

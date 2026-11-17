@@ -32,6 +32,30 @@ public final class CompletionPolicy {
         return Action.STOP;
     }
 
+    // ---------- v1.26.0 整本循环去向（多曲目书） ----------
+
+    public enum LoopTarget {
+        /** 单章范围，或整书范围下无处可去（单曲目书／无所属书）：回本曲开头 */
+        RESTART_SELF,
+        /** 整书范围且本书内有下一曲：接播本书下一曲 */
+        NEXT_IN_BOOK,
+        /** 整书范围、已到书末且本书多曲目：回本书首曲 */
+        FIRST_OF_BOOK
+    }
+
+    /**
+     * 循环开时的去向（v1.26.0）：decide() 无范围参数、循环开一律 RESTART，
+     * 多曲目书（论语 20 篇）每篇播完会同篇重播；本判定按循环范围分流——
+     * 单章范围回本曲、整书范围在本书内接下一曲、书末回书首、单曲目书回本曲。
+     * hasNextInBook / multiTrackBook 由调用方按当前曲目所属书现算（无书时均为 false）。
+     */
+    public static LoopTarget loopTarget(boolean scopeChapter, boolean hasNextInBook, boolean multiTrackBook) {
+        if (scopeChapter) return LoopTarget.RESTART_SELF;
+        if (hasNextInBook) return LoopTarget.NEXT_IN_BOOK;
+        if (multiTrackBook) return LoopTarget.FIRST_OF_BOOK;
+        return LoopTarget.RESTART_SELF;
+    }
+
     // ---------- v1.21.0 章界去向（循环范围口径） ----------
 
     public enum ChapterAction {
