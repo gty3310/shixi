@@ -3,6 +3,22 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.25.0] - 2026-11-17
+
+发布提交：4c2f63c · 对比：https://github.com/gty3310/shixi/compare/v1.24.0...v1.25.0 · 标签 v1.25.0
+
+### 新增
+- 《大学》第三声「AI 朗读·正音版」：原声／AI 二元模型泛化为第三声 aizz——VoicePref 新增 VOICE_AIZZ、hasAizzVoice、voiceAudioAsset、isAssetVoice，偏好与位置归属（pos_voice）接受 aizz，voiceName 显示「AI 朗读·正音版」；ContentRepo 新增 loadVoice／loadAizz 泛化分发（bookForTrack、bookForVoice、scaleFor 与 ChapterListActivity 章轴同口径），缓存键 daxue#aizz 与旧 #ai 分开；PlayerService 的数据源、总时长（effDurationMs）与 activeVoice 按所选 assets 声音（ai／aizz）分发，切声仍走既有 mapPosition 按句对位；VoiceChoiceActivity 仅在有 aizz 资产时出第三张选项卡（名字＋试听），旧 AI 音轨与法师原声保留不删，其他书不出现该选项（《中庸》仍为原声／AI 两声）
+- 音轨资产按 daxue_ai 既有方式入工程：assets/audio_ai/daxue_aizz.mp3（6,411,789 B，1 倍速，534.23 秒）＋daxue_aizz.json（93,709 B，143 句时间轴），普通 git add 入库（非 force-add），与 daxue_ai.mp3 同目录同引用法；包内实测 mp3 为 STORED 未压缩存储，openFd 直读成立
+
+### 如实口径（不许改写）
+- 本轨由正音终检过的纯文本版合成——SSML 钉音经小样实测未被云大围 402002 执行（判别句轉寫与纯文本一致），故按纪律走纯文本兜底；160 处钉音在音频里无锁、由引擎按语境读，属已知残余风险。选声页显示名仍按定案「AI 朗读·正音版」
+
+### 验收
+- 切声对位桌面断言全过：aizz 时间轴 143 句与《大学》原声内容包及旧 AI 轴逐句对位——句 id 序完全一致、textS／textT 逐句一致、章结构与各章句数一致、时间单调递增、总时长 534,229 ms、末句 endMs＝534,229；资产入工程后 md5 与源文件逐字一致（mp3 a5d4dea56ad4f68669e1823c39a83e5c、json f7228142e1685db8014549f84c81426f）
+- aapt2 badging 实测 versionCode 49 / versionName 1.25.0，包内含识读原生库（libsherpa-onnx-jni.so、libonnxruntime.so）与三条《大学》音轨资产（daxue_aizz.mp3 STORED）；BuildInfo 构建短号＝发布提交 4c2f63c（dex 内实查）；APK size 42955634、sha256 1839de1dd10b39fc11949f9836e000bb6b251f2c4e5f99e5435ac00131472170、md5 192ed6dc29f5185fed5d3032379e8b68
+- 真机未验：选声页第三选项的呈现与试听、正音版实际播放与切声对位听感、从 v1.24.0 应用内更新升到本版，待用户实测
+
 ## [1.24.0] - 2026-11-01
 
 发布提交：3933af1 · 对比：https://github.com/gty3310/shixi/compare/v1.23.0...v1.24.0 · 标签 v1.24.0
