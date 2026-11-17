@@ -1326,18 +1326,39 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 if (PlayerService.instance != null) PlayerService.instance.refreshStats();
                 finishDialogShowing = true;
                 int today = store.trackToday(track);
+                // v1.26.0：下一章目标——所属书内下一曲存在且有原文才算有；单曲目书
+                // （大学/中庸整书即一曲）与全书最后一篇均无目标，弹框只显示三项
+                Track nextTrack = null;
+                String bid = PlanBooks.bookIdOfTrackFull(track);
+                if (bid != null) {
+                    java.util.List<Track> ts = PlanBooks.tracksOfBook(store, bid);
+                    for (int i = 0; i < ts.size(); i++) {
+                        if (ts.get(i).id.equals(track.id)) {
+                            if (i + 1 < ts.size() && ContentRepo.hasContent(ts.get(i + 1))) {
+                                nextTrack = ts.get(i + 1);
+                            }
+                            break;
+                        }
+                    }
+                }
+                final Track next = nextTrack;
+                String[] options = next != null
+                        ? new String[]{"再读一遍", "回到第一页", "留在本页", "下一章"}
+                        : new String[]{"再读一遍", "回到第一页", "留在本页"};
                 new AlertDialog.Builder(ReaderActivity.this)
                         .setTitle("已读完一遍")
                         .setMessage(track.title + " 今日 +1 遍（今日共 " + today + " 遍）")
-                        .setPositiveButton("再读一遍", (d, w) -> {
+                        .setItems(options, (d, w) -> {
                             finishDialogShowing = false;
-                            web.evaluateJavascript("goTop()", null);
+                            if (w == 0 || w == 1) {
+                                web.evaluateJavascript("goTop()", null);
+                            } else if (w == 3 && next != null) {
+                                startActivity(new Intent(ReaderActivity.this, ReaderActivity.class)
+                                        .putExtra(EXTRA_TRACK_ID, next.id));
+                                ReaderActivity.this.finish();
+                            }
+                            // w == 2 留在本页：仅关框
                         })
-                        .setNegativeButton("回到第一页", (d, w) -> {
-                            finishDialogShowing = false;
-                            web.evaluateJavascript("goTop()", null);
-                        })
-                        .setNeutralButton("留在本页", (d, w) -> finishDialogShowing = false)
                         .setOnCancelListener(d -> finishDialogShowing = false)
                         .show();
             });
