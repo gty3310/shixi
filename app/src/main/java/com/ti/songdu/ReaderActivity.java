@@ -1347,9 +1347,25 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 String[] options = next != null
                         ? new String[]{"再读一遍", "回到第一页", "留在本页", "下一章"}
                         : new String[]{"再读一遍", "回到第一页", "留在本页"};
+                // v1.28.0：计数行改走 setCustomTitle 承载——setMessage 与 setItems 同设时
+                // AlertController 只渲染正文、永不挂载选项列表（四选项自 v1.26 起从未显示的根因）
+                LinearLayout titleBox = new LinearLayout(ReaderActivity.this);
+                titleBox.setOrientation(LinearLayout.VERTICAL);
+                float density = getResources().getDisplayMetrics().density;
+                titleBox.setPadding((int) (24 * density), (int) (20 * density),
+                        (int) (24 * density), (int) (4 * density));
+                TextView titleMain = new TextView(ReaderActivity.this);
+                titleMain.setText("已读完一遍");
+                titleMain.setTextSize(20);
+                titleMain.setTextColor(0xFF212121);
+                TextView titleSub = new TextView(ReaderActivity.this);
+                titleSub.setText(track.title + " 今日 +1 遍（今日共 " + today + " 遍）");
+                titleSub.setTextSize(14);
+                titleSub.setTextColor(0xFF757575);
+                titleBox.addView(titleMain);
+                titleBox.addView(titleSub);
                 new AlertDialog.Builder(ReaderActivity.this)
-                        .setTitle("已读完一遍")
-                        .setMessage(track.title + " 今日 +1 遍（今日共 " + today + " 遍）")
+                        .setCustomTitle(titleBox)
                         .setItems(options, (d, w) -> {
                             finishDialogShowing = false;
                             if (w == 0 || w == 1) {

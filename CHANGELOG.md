@@ -3,6 +3,21 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.28.0] - 2026-11-17
+
+发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.27.0...v1.28.0 · 标签 v1.28.0
+
+### 修复
+- 阅读读完弹框四选项自 v1.26 起从未显示：ReaderActivity.Bridge.finishRead 的 AlertDialog 同时 setMessage 与 setItems——Android 的 AlertController 在设有正文（message）时只渲染正文、永不把选项列表（ListView）挂进视图树，列表被创建却静默丢失，用户点底部「已读到末尾 · 点此记一遍」只看到标题＋计数正文那张小卡片（记遍因在弹框前执行、照常 +1）。v1.26 提交 ce3e91a 把三按钮换成 setItems 时原样保留了 setMessage，即为引入点；全 App 仅此一处弹框中招。改法只动弹框构造段：删 setMessage，计数行改由 setCustomTitle 承载（两行 TextView：第一行「已读完一遍」、第二行小字「{track.title} 今日 +1 遍（今日共 {today} 遍）」，信息一字不丢）；setItems 四选项（再读一遍／回到第一页／留在本页／下一章）与各自动作、store.increment 在弹框前执行的记遍时机、finishDialogShowing 置位/复位逻辑全部原样不动；reader.html 不动
+
+### 改进
+- 古读标红加重：reader.html 的 `body.gdon ruby.gd rt` 样式由 `color:#9E3B2B` 改为 `color:#C8401F;font-weight:bold`。原 #9E3B2B 偏棕暗、且每页标红本就稀疏，用户真机感知为「拼音全黑」（排查实证标红链无缺陷：五份运行时书数据逐句离线模拟全数挂载零拒绝、node 实跑旗舰句位点全对、用户截图中《论语》夫 fú 本已标红）。#C8401F 取朱砂红区间（#C8401F～#D94B3A）饱和度最高、明度适中一端：在宣纸米白底上小字拼音也一眼可辨，同时与识读错字样式（#B03A2A、更深沉）的层级关系不变——两类同现时仍错字样式优先（规则特异性未动）。只改这一条规则，普通拼音不碰；整句与小句两条渲染路径共用此规则
+
+### 验收
+- 未经模拟器／真机验证（未验先发）：本机 VM 无 KVM、安卓模拟器未能启动，用户 2026-11-17 亲令未验先发（照 v1.26.0 先例）；弹框四选项与标红加重在真机上的呈现待用户验收
+- 代码级验证（待回填）：构建后 dexdump 复查发布 APK 的 finishRead lambda——setMessage 调用消失、setCustomTitle/setItems 在位；node 实跑 reader 模板旗舰句——标红类名不变、包内 reader.html 已为新色值＋粗体；改动面仅 ReaderActivity.java 与 reader.html 两文件，清单数据、遍数／循环／播放逻辑未动
+- aapt badging 与 APK size／sha256／md5（待回填）
+
 ## [1.27.0] - 2026-11-17
 
 发布提交：608c50c · 对比：https://github.com/gty3310/shixi/compare/v1.26.0...v1.27.0 · 标签 v1.27.0
