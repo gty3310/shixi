@@ -927,6 +927,84 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         afterCountsChanged();
     }
 
+    /**
+     * v1.30.0 篇行「今日 X 遍」编辑弹框：− ＋ 步进与直接输数都先落到输入框，
+     * 点「存」才写回分章账（目标值与今日现值之差走 ChapterStatsStore
+     * .adjustChapterToday，与章列表页 − ＋ 同一本账同一口径、下限 0）；
+     * 非法输入（空/非数字/负数/超 int 上限，ChapterTodayEdit.parseInput 判定）
+     * 拦截不写、弹框不关。写回后 refreshAll，组头整本数与篇行即时刷新。
+     */
+    private void showChapterTodayEditor(String bookId, int chapterIndex, String rowTitle) {
+        ChapterStatsStore stats = ChapterStatsStore.get(this);
+        int cur = stats.chapterToday(bookId, chapterIndex, LocalDate.now());
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), dp(2));
+        TextView minus = new TextView(this);
+        minus.setText("−");
+        minus.setTextSize(20);
+        minus.setTypeface(null, Typeface.BOLD);
+        minus.setTextColor(getColor(R.color.accent));
+        minus.setGravity(Gravity.CENTER);
+        minus.setBackgroundResource(R.drawable.circle_outline);
+        minus.setLayoutParams(new LinearLayout.LayoutParams(dp(38), dp(38)));
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setText(String.valueOf(cur));
+        input.setTextSize(18);
+        input.setGravity(Gravity.CENTER);
+        input.setSelectAllOnFocus(true);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        ilp.leftMargin = dp(10);
+        ilp.rightMargin = dp(10);
+        input.setLayoutParams(ilp);
+        TextView plus = new TextView(this);
+        plus.setText("＋");
+        plus.setTextSize(19);
+        plus.setTypeface(null, Typeface.BOLD);
+        plus.setTextColor(getColor(R.color.accent));
+        plus.setGravity(Gravity.CENTER);
+        plus.setBackgroundResource(R.drawable.circle_outline);
+        plus.setLayoutParams(new LinearLayout.LayoutParams(dp(38), dp(38)));
+        minus.setOnClickListener(v -> {
+            Integer now = ChapterTodayEdit.parseInput(input.getText().toString());
+            int base = now != null ? now : cur;
+            input.setText(String.valueOf(ChapterTodayEdit.stepped(base, -1)));
+            input.setSelection(input.getText().length());
+        });
+        plus.setOnClickListener(v -> {
+            Integer now = ChapterTodayEdit.parseInput(input.getText().toString());
+            int base = now != null ? now : cur;
+            input.setText(String.valueOf(ChapterTodayEdit.stepped(base, 1)));
+            input.setSelection(input.getText().length());
+        });
+        box.addView(minus);
+        box.addView(input);
+        box.addView(plus);
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle(rowTitle + " · 今日遍数")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("存", null)
+                .create();
+        dlg.setOnShowListener(d -> dlg.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(v -> {
+                    Integer target = ChapterTodayEdit.parseInput(input.getText().toString());
+                    if (target == null) {
+                        Toast.makeText(this, "请输入 0 或正整数", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    LocalDate today = LocalDate.now();
+                    int delta = target - stats.chapterToday(bookId, chapterIndex, today);
+                    if (delta != 0) stats.adjustChapterToday(bookId, chapterIndex, today, delta);
+                    dlg.dismiss();
+                    refreshAll();
+                }));
+        dlg.show();
+    }
+
     /** v1.4 打开某音频的阅读页（内容包匹配在 ContentRepo；无原文的音频不会走到这里） */
     private void openReader(Track t) {
         startActivity(new Intent(this, ReaderActivity.class)
@@ -1006,20 +1084,21 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             } else {
                 int j = i + 1;
                 while (j < n && t.group.equals(store.tracks.get(j).group)) j++;
-                View header = buildGroupHeader(t.group, i, j);
+                String gBookId = groupBookId(t.group);
+                View header = buildGroupHeader(t.group, i, j, gBookId);
                 groupHeaderViews.put(t.group, header);
                 listContainer.addView(header);
                 java.util.List<View> rows = new ArrayList<>();
                 if (expandedGroups.contains(t.group)) {
                     // 展开态：全部篇目按篇序，今天读过的在原位带「今日」标
-                    for (int k = i; k < j; k++) rows.add(buildPianRow(store.tracks.get(k)));
+                    for (int k = i; k < j; k++) rows.add(buildPianRow(store.tracks.get(k), gBookId, k - i));
                 } else {
                     // 收起态（默认）：只露今天有遍数的篇（按篇序），其余收起
                     int shown = 0;
                     for (int k = i; k < j; k++) {
                         Track ct = store.tracks.get(k);
                         if (store.trackToday(ct) > 0) {
-                            rows.add(buildPianRow(ct));
+                            rows.add(buildPianRow(ct, gBookId, k - i));
                             shown++;
                         }
                     }
@@ -1035,12 +1114,23 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     }
 
     /**
-     * 组头行（mockup v2 定稿）：左朱砂竖条＋米色底；第一行《书名》＋「全N篇」，
-     * 第二行汇总「今日读了 X 篇 · 共 Y 遍」与「本月进度 N / 总篇数 篇」；右上角三角
-     * （收起 ▽／展开 △）。整行可点切换展开/收起（持久化），长按整组拖动。
+     * 组头行（mockup v2 定稿）：左朱砂竖条＋米色底；第一行《书名》＋「全N篇」；
+     * 右上角三角（收起 ▽／展开 △）。整行可点切换展开/收起（持久化），长按整组拖动。
      * 汇总数字在每次 buildTrackList 时现算（计数变化会触发重建，见 onCountChanged）。
+     * v1.30.0：组名对得上分章账书目（如《论语》）时，第二行起改与整本书卡同
+     * 式样（今日整本大字＋五档统计行，数字走分章账）；对不上的组保留旧式样
+     * （第二行汇总「今日读了 X 篇 · 共 Y 遍」与「本月进度 N / 总篇数 篇」，走曲目账）。
      */
-    private View buildGroupHeader(String group, int from, int to) {
+    /** 组名（书名）→ 分章账书 id（PlanBooks 已知书目按书名对位）；无对应返回 null */
+    private static String groupBookId(String group) {
+        if (group == null) return null;
+        for (PlanBooks.BookInfo b : PlanBooks.KNOWN) {
+            if (b.title.equals(group)) return b.bookId;
+        }
+        return null;
+    }
+
+    private View buildGroupHeader(String group, int from, int to, String bookId) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         GradientDrawable bg = new GradientDrawable();
@@ -1095,31 +1185,102 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         }
         col.addView(line1);
 
-        int todayPian = 0, todaySum = 0, monthPian = 0;
-        for (int k = from; k < to; k++) {
-            Track tk = store.tracks.get(k);
-            int td = store.trackToday(tk);
-            if (td > 0) { todayPian++; todaySum += td; }
-            if (store.trackThisMonth(tk) > 0) monthPian++;
+        PlanBooks.BookInfo gInfo = bookId != null ? PlanBooks.infoOf(bookId) : null;
+        if (gInfo != null && gInfo.chapterCount == to - from) {
+            // v1.30.0 分章书组头与整本书卡同式样：今日整本大字＋五档统计行，
+            // 数字全走分章账（ChapterStatsStore，与章列表页同一本账）：今日＝
+            // Σ各篇今日÷篇数（v1.26 口径、一位小数）；本周/上周/本月此前没有
+            // 整本聚合，按同一口径聚合（Σ各篇该档÷篇数），日期边界与 Store 的
+            // 卡片口径一致（本周一至今日、上周一至上周日、本月 1 日至今日）；
+            // 总计＝Σ各篇累计÷篇数。「本月进度」缩为次要信息，放今日行右端。
+            ChapterStatsStore stats = ChapterStatsStore.get(this);
+            LocalDate today = LocalDate.now();
+            int nCh = gInfo.chapterCount;
+            int sumToday = stats.bookTotalOn(bookId, today);
+            int sumWeek = stats.bookSumBetween(bookId, Store.thisMonday(), today);
+            int sumLastWeek = stats.bookSumBetween(bookId, Store.lastMonday(), Store.lastSunday());
+            int sumMonth = stats.bookSumBetween(bookId, Store.monthFirst(), today);
+            int sumTotal = stats.bookTotal(bookId);
+            int monthPian = 0;
+            for (int c = 0; c < nCh; c++) {
+                if (stats.chapterSumBetween(bookId, c, Store.monthFirst(), today) > 0) monthPian++;
+            }
+            LinearLayout line2 = new LinearLayout(this);
+            line2.setOrientation(LinearLayout.HORIZONTAL);
+            line2.setGravity(Gravity.CENTER_VERTICAL);
+            TextView lab = new TextView(this);
+            lab.setText("今日 ");
+            lab.setTextSize(14);
+            lab.setTextColor(getColor(R.color.muted));
+            line2.addView(lab);
+            TextView big = new TextView(this);
+            big.setText(BookCountFormat.wholeBookToday(sumToday, nCh));
+            big.setTextSize(30);
+            big.setTypeface(null, Typeface.BOLD);
+            big.setTextColor(getColor(R.color.accent));
+            line2.addView(big);
+            TextView unit = new TextView(this);
+            unit.setText(" 遍");
+            unit.setTextSize(14);
+            unit.setTypeface(null, Typeface.BOLD);
+            unit.setTextColor(getColor(R.color.accent));
+            line2.addView(unit);
+            TextView prog = new TextView(this);
+            prog.setText("本月进度 " + monthPian + " / " + nCh + " " + gInfo.unitName);
+            prog.setTextSize(13);
+            prog.setTextColor(getColor(R.color.muted));
+            prog.setGravity(Gravity.RIGHT);
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            plp.leftMargin = dp(10);
+            prog.setLayoutParams(plp);
+            line2.addView(prog);
+            LinearLayout.LayoutParams l2lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            l2lp.topMargin = dp(4);
+            line2.setLayoutParams(l2lp);
+            col.addView(line2);
+
+            TextView statsLine = new TextView(this);
+            statsLine.setText("今日 " + BookCountFormat.wholeBookToday(sumToday, nCh) + " 遍"
+                    + " · 本周 " + BookCountFormat.wholeBook(sumWeek, nCh) + " 遍"
+                    + " · 上周 " + BookCountFormat.wholeBook(sumLastWeek, nCh) + " 遍"
+                    + " · 本月 " + BookCountFormat.wholeBook(sumMonth, nCh) + " 遍"
+                    + " · 总计 " + BookCountFormat.wholeBook(sumTotal, nCh) + " 遍");
+            statsLine.setTextSize(12);
+            statsLine.setTextColor(getColor(R.color.muted));
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            slp.topMargin = dp(2);
+            statsLine.setLayoutParams(slp);
+            col.addView(statsLine);
+        } else {
+            int todayPian = 0, todaySum = 0, monthPian = 0;
+            for (int k = from; k < to; k++) {
+                Track tk = store.tracks.get(k);
+                int td = store.trackToday(tk);
+                if (td > 0) { todayPian++; todaySum += td; }
+                if (store.trackThisMonth(tk) > 0) monthPian++;
+            }
+            LinearLayout line2 = new LinearLayout(this);
+            line2.setOrientation(LinearLayout.HORIZONTAL);
+            TextView sum = new TextView(this);
+            sum.setText("今日读了 " + todayPian + " 篇 · 共 " + todaySum + " 遍");
+            sum.setTextSize(13);
+            sum.setTextColor(getColor(R.color.ink));
+            sum.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            line2.addView(sum);
+            TextView prog = new TextView(this);
+            prog.setText("本月进度 " + monthPian + " / " + (to - from) + " 篇");
+            prog.setTextSize(13);
+            prog.setTextColor(getColor(R.color.muted));
+            line2.addView(prog);
+            LinearLayout.LayoutParams l2lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            l2lp.topMargin = dp(5);
+            line2.setLayoutParams(l2lp);
+            col.addView(line2);
         }
-        LinearLayout line2 = new LinearLayout(this);
-        line2.setOrientation(LinearLayout.HORIZONTAL);
-        TextView sum = new TextView(this);
-        sum.setText("今日读了 " + todayPian + " 篇 · 共 " + todaySum + " 遍");
-        sum.setTextSize(13);
-        sum.setTextColor(getColor(R.color.ink));
-        sum.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        line2.addView(sum);
-        TextView prog = new TextView(this);
-        prog.setText("本月进度 " + monthPian + " / " + (to - from) + " 篇");
-        prog.setTextSize(13);
-        prog.setTextColor(getColor(R.color.muted));
-        line2.addView(prog);
-        LinearLayout.LayoutParams l2lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        l2lp.topMargin = dp(5);
-        line2.setLayoutParams(l2lp);
-        col.addView(line2);
 
         TextView tri = new TextView(this);
         tri.setText(expandedGroups.contains(group) ? "▲" : "▼");
@@ -1175,8 +1336,10 @@ public class MainActivity extends Activity implements PlayerService.Listener {
      * 组内篇行（mockup v2 定稿紧凑版式）：篇名（＋今日朱砂小标）、单行五数统计、
      * 圆形播放钮、金色「阅读」钮。不带齿轮/删除（篇目设置不在此行），不单独拖动
      * （只作拖放目标）。正在播放的篇沿用普通卡的高亮口径。
+     * v1.30.0：组名对得上分章账书目时，行首行右端加「今日 X 遍」chip（数出
+     * 分章账），点它弹框改本篇今日遍数，不必进章列表页（见 showChapterTodayEditor）。
      */
-    private View buildPianRow(Track ct) {
+    private View buildPianRow(Track ct, String groupBookId, int chapterIndex) {
         boolean isCurrent = PlayerService.instance != null
                 && PlayerService.instance.current != null
                 && PlayerService.instance.current.id.equals(ct.id);
@@ -1221,6 +1384,25 @@ public class MainActivity extends Activity implements PlayerService.Listener {
             tlp.leftMargin = dp(8);
             tag.setLayoutParams(tlp);
             line1.addView(tag);
+        }
+        if (groupBookId != null) {
+            // v1.30.0 篇行直接带分章账的「今日 X 遍」，点它弹框改数
+            View spacer = new View(this);
+            spacer.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1));
+            line1.addView(spacer);
+            TextView chip = new TextView(this);
+            int chToday = ChapterStatsStore.get(this)
+                    .chapterToday(groupBookId, chapterIndex, LocalDate.now());
+            chip.setText("今日 " + chToday + " 遍");
+            chip.setTextSize(12.5f);
+            chip.setTextColor(getColor(R.color.accent));
+            chip.setBackgroundResource(R.drawable.pill_outline);
+            chip.setPadding(dp(10), dp(4), dp(10), dp(4));
+            final String bid = groupBookId;
+            final int chIdx = chapterIndex;
+            final String rowTitle = t;
+            chip.setOnClickListener(v -> showChapterTodayEditor(bid, chIdx, rowTitle));
+            line1.addView(chip);
         }
         root.addView(line1);
 

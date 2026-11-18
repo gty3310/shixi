@@ -37,6 +37,7 @@ section.ch:first-child h2{margin-top:.15em}
 body.noteson .ntb{display:block;font-size:.72em;line-height:1.55;color:#6E6455;background:rgba(169,124,44,.07);border-left:3px solid #D8CDB4;padding:.5em .75em;margin:.4em 0 .9em;text-align:justify;}
 body.vert .ntb{display:none !important;}
 .ntb .ntf{display:block;margin-top:.35em;font-size:.86em;color:#A97C2C;user-select:none;-webkit-user-select:none;}
+.ntb .ntf:empty{display:none;}
 .ntb.cur{border-left-color:#9E3B2B;background:rgba(158,59,43,.12);}
 .ntb.cur .ntt{color:#8A3226;}
 p{margin:0;text-align:justify;}
@@ -117,12 +118,17 @@ function sentHTML(s){
   return '<span class="s' + (s.noAudio ? ' na' : '') + '" id="si' + s._i +
          '" data-i="' + s._i + '">' + out + '</span>';
 }
-/* ===== 注释（v1.9.0；v1.20.5 起三家；v1.29.0 起四家）=====
-   句子对象的 nt 字段由 ContentRepo 注入：nt.zj / nt.jz / nt.gf / nt.dd = {t 注文,
-   a 块首拉平下标, b 块末拉平下标}，是「覆盖本句的那一块」在该版本下的判定结果。
+/* ===== 注释（v1.9.0；v1.20.5 起三家；v1.29.0 起四家；v1.30.0 起注块模型）=====
+   句子对象的 nt 字段由 ContentRepo 注入：nt.zj / nt.jz / nt.gf / nt.dd 是
+   「覆盖本句的那一块」在该版本下的判定结果 {a 块首拉平下标, b 块末拉平下标}，
+   其中只有覆盖段末尾句的那份带 t 注文，其余句只有 {a,b} 归属标记。
+   v1.30.0 注块模型（只对导读 dd）：一条导读只在它那一段的末尾渲染一次
+   （noteEndFor 判定：本句带 t 才落点），块内各句原句照旧逐句连排（拼音/
+   标红/点句/跟随高亮都按句），不再逐句重复同一条注。直解/集注/耕夫三家
+   的 nt 仍逐句带 t、逐句渲染，排版与旧逐句模型分毫不差（用户定版）。
    显示时优先当前选定版本（notesVer），该版本无块覆盖才按固定次序回退其他家，
-   页脚如实标实际显示的那家（dd 的页脚即来源行「导读来源：lunyu.ai」）。
-   古人按段注、块内每句共用此注，所以每句后面都挂同一块注（本节口径）。
+   页脚如实标实际显示的那家；v1.30.0 起导读（dd）不出页脚行（noteFooter 对
+   dd 返回空串、.ntf 以 :empty 规则整行隐藏，出处只在选版窗出现）。
    注块是句子 span 的同级后随元素（不在 .s 内部，不干扰小句拆分与点句 seek）。 */
 var NOTE_VER_KEYS = [['zhijie','zj'], ['jizhu','jz'], ['gengfu','gf'], ['daodu','dd']];
 function noteFor(s){
@@ -136,42 +142,64 @@ function noteFor(s){
   }
   return null;
 }
+/* 本句是不是某条注的「渲染落点」：按版本优先序找第一家在本句带 t 的条目
+   （ContentRepo 只在覆盖段末尾句写 t）。返回它才在本句后渲染注元素。 */
+function noteEndFor(s){
+  if (!s || !s.nt) return null;
+  var order = [];
+  NOTE_VER_KEYS.forEach(function(p){ if (p[0] === notesVer) order.push(p[1]); });
+  NOTE_VER_KEYS.forEach(function(p){ if (p[0] !== notesVer) order.push(p[1]); });
+  for (var i = 0; i < order.length; i++){
+    var n = s.nt[order[i]];
+    if (n && n.t) return {t:n.t, a:n.a, b:n.b, ver:order[i]};
+  }
+  return null;
+}
 function noteFooter(n){
-  var lab = n.ver === 'zj' ? '张居正的版本' : n.ver === 'jz' ? '朱熹的版本'
-    : n.ver === 'dd' ? '导读来源：lunyu.ai' : '耕夫讲经典';
+  if (n.ver === 'dd') return ''; /* v1.30.0 导读不出页脚行，出处只在选版窗 */
+  var lab = n.ver === 'zj' ? '张居正的版本' : n.ver === 'jz' ? '朱熹的版本' : '耕夫讲经典';
   if (n.b > n.a) lab += ' · 本注管第 ' + (n.a + 1) + '–' + (n.b + 1) + ' 句';
   return lab;
 }
 function noteHTML(s){
-  var n = noteFor(s);
+  var n = noteEndFor(s);
   if (!n) return '';
   return '<span class="ntb" id="nt' + s._i + '"><span class="ntt">' + esc(n.t) +
          '</span><span class="ntf">' + esc(noteFooter(n)) + '</span></span>';
 }
-function fillNote(i){
-  var d = document.getElementById('nt' + i);
-  if (!d) return;
-  var n = noteFor(flat[i]);
-  if (!n) return;
-  d.querySelector('.ntt').textContent = n.t;
-  d.querySelector('.ntf').textContent = noteFooter(n);
+/* 版本切换：各版本的块界不同，落点集合随之变——旧注元素整批摘除，按新版本
+   的落点在对应句后重新插入；选择由原生侧持久化后回推 */
+function rebuildNotes(){
+  var olds = document.querySelectorAll('.ntb');
+  for (var k = 0; k < olds.length; k++) olds[k].remove();
+  curNoteEl = null;
+  for (var i = 0; i < flat.length; i++){
+    var h = noteHTML(flat[i]);
+    if (!h) continue;
+    var el = document.getElementById('si' + i);
+    if (el) el.insertAdjacentHTML('afterend', h);
+  }
+  if (cur >= 0) markNote(cur);
 }
-/* 版本切换：全书注块按新版本重填（文本＋页脚），选择由原生侧持久化后回推 */
 function setNotesVer(v){
   notesVer = v;
-  for (var i = 0; i < flat.length; i++) fillNote(i);
+  rebuildNotes();
 }
 function setNotesOn(on){
   document.body.classList.toggle('noteson', !!on);
 }
-/* 当前句的注块同步亮起：与 markCur 同步调用；同块内换句时新句的注块接棒亮起
-   （块内每句各有一份同文注块，亮的始终是当前句那一份） */
+/* 当前句的注同步亮起：与 markCur 同步调用。导读（dd）的注只在块尾有一份
+   元素，按当前句的块归属（noteFor 的 b）定位它——同块内换句亮的是同一份；
+   其余三家逐句有元素，亮当前句自己那份（与旧口径一致） */
 var curNoteEl = null;
 function markNote(i){
   if (curNoteEl){ curNoteEl.classList.remove('cur'); curNoteEl = null; }
   if (i >= 0){
-    var n = document.getElementById('nt' + i);
-    if (n){ n.classList.add('cur'); curNoteEl = n; }
+    var nf = noteFor(flat[i]);
+    if (nf){
+      var el = document.getElementById('nt' + (nf.ver === 'dd' ? nf.b : i));
+      if (el){ el.classList.add('cur'); curNoteEl = el; }
+    }
   }
 }
 /* 翻页式跟随（v1.4.2，用户要求像读书翻页，不要当前句永远居中）：

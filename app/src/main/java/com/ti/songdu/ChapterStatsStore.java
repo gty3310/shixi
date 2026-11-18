@@ -130,6 +130,38 @@ public final class ChapterStatsStore {
         return sum;
     }
 
+    /**
+     * v1.30.0 某书在日期区间 [from, to] 内的全部章合计（单遍扫账、含两端）：
+     * 首页组头整本统计行（本周/上周/本月）聚合用；日期口径与 Store 的
+     * trackThisWeek/trackLastWeek/trackThisMonth 边界一致（周一起、月 1 日起）。
+     */
+    public synchronized int bookSumBetween(String bookId, LocalDate from, LocalDate to) {
+        if (bookId == null || from == null || to == null || from.isAfter(to)) return 0;
+        int sum = 0;
+        String prefix = bookId + "|";
+        Iterator<String> it = root.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (!k.startsWith(prefix)) continue;
+            try {
+                LocalDate d = LocalDate.parse(k.substring(k.lastIndexOf('|') + 1));
+                if (!d.isBefore(from) && !d.isAfter(to)) sum += entryVal(k, "a") + entryVal(k, "m");
+            } catch (Exception ignored) {
+            }
+        }
+        return sum;
+    }
+
+    /** v1.30.0 某章在日期区间 [from, to] 内的合计（逐日直查，含两端） */
+    public synchronized int chapterSumBetween(String bookId, int chapterIndex, LocalDate from, LocalDate to) {
+        if (bookId == null || chapterIndex < 0 || from == null || to == null || from.isAfter(to)) return 0;
+        int sum = 0;
+        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+            sum += entryVal(key(bookId, chapterIndex, d), "a") + entryVal(key(bookId, chapterIndex, d), "m");
+        }
+        return sum;
+    }
+
     /** 某书全部日期合计 */
     public synchronized int bookTotal(String bookId) {
         int sum = 0;

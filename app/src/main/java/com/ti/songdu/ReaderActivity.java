@@ -539,12 +539,20 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         return null;
     }
 
-    /** 注栏页脚的版本名（实际显示的那家）；导读一家按用户定版口径直接写来源行 */
+    /** 注栏页脚的版本名（实际显示的那家）；v1.30.0 起导读一家不出页脚行
+     *  （返回空串，注栏页脚整行隐藏；出处只在选版窗的版本名与说明里出现） */
     private static String noteVerLabel(String ver) {
         if ("jizhu".equals(ver)) return "朱熹的版本";
         if ("gengfu".equals(ver)) return "耕夫讲经典";
-        if ("daodu".equals(ver)) return "导读来源：lunyu.ai";
+        if ("daodu".equals(ver)) return "";
         return "张居正的版本";
+    }
+
+    /** 注栏页脚落字：空文案整行隐藏（导读一家无页脚），非空才显示 */
+    private void setNoteFooter(String lab) {
+        readerNoteFooter.setText(lab);
+        readerNoteFooter.setVisibility(
+                lab == null || lab.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     /**
@@ -566,7 +574,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             if (!key.equals(noteBarKey)) {
                 noteBarKey = key;
                 readerNoteText.setText("播放或点按一句，这里显示这一句的注释。");
-                readerNoteFooter.setText(defLab);
+                setNoteFooter(defLab);
                 readerNoteScroll.scrollTo(0, 0);
             }
             return;
@@ -578,7 +586,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             if (!key.equals(noteBarKey)) {
                 noteBarKey = key;
                 readerNoteText.setText("本句暂无注释。");
-                readerNoteFooter.setText(defLab);
+                setNoteFooter(defLab);
                 readerNoteScroll.scrollTo(0, 0);
             }
             return;
@@ -588,10 +596,10 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             noteBarKey = key;
             readerNoteText.setText(ref.text);
             String lab = noteVerLabel(usedVer[0]);
-            if (ref.endFlat > ref.startFlat) {
+            if (!lab.isEmpty() && ref.endFlat > ref.startFlat) {
                 lab += " · 本注管第 " + (ref.startFlat + 1) + "–" + (ref.endFlat + 1) + " 句";
             }
-            readerNoteFooter.setText(lab);
+            setNoteFooter(lab);
             readerNoteScroll.scrollTo(0, 0);
         }
     }

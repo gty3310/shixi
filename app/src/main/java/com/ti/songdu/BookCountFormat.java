@@ -11,8 +11,17 @@ import java.math.RoundingMode;
 public final class BookCountFormat {
 
     public static String wholeBookToday(int sumToday, int chapterCount) {
+        return wholeBook(sumToday, chapterCount);
+    }
+
+    /**
+     * v1.30.0 整本折算（通用档位）：各章在某时段的遍数之和 ÷ 章数，一位小数、
+     * 四舍五入——与 wholeBookToday 同一口径，供首页组头统计行的本周/上周/
+     * 本月/总计各档使用（分章账此前没有整本聚合，按同一口径聚合）。
+     */
+    public static String wholeBook(int sum, int chapterCount) {
         if (chapterCount <= 0) return "0.0";
-        return BigDecimal.valueOf(sumToday)
+        return BigDecimal.valueOf(sum)
                 .divide(BigDecimal.valueOf(chapterCount), 1, RoundingMode.HALF_UP)
                 .toPlainString();
     }

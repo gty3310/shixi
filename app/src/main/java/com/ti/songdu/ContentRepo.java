@@ -509,8 +509,9 @@ public class ContentRepo {
     // attachGdToDoc 在此对 lunyuDoc 再挂一份。数据同源：assets/notes/
     // lunyu_notes.json（{句id: {daodu, daoduSpan}}，生成器 gen_lunyu_daodu.py）。
     // 与整本口径的唯一差别：nt.dd 的 a/b 是「篇内」拉平下标——单篇渲染时
-    // reader.html 的句序号从本篇 0 起，页脚「本注管第 X–Y 句」按篇内数才对。
+    // reader.html 的句序号从本篇 0 起，块归属按篇内数才对。
     // 导读注块由生成器按章切分、块间不重叠不嵌套，逐块直写即可；无数据零回退。
+    // v1.30.0 注块模型：全量 {t,a,b} 只写块末句、块内其余句只写 {a,b} 标记。
 
     private static JSONObject lunyuNotesCache;
 
@@ -545,10 +546,15 @@ public class ContentRepo {
                     if (t == null || t.length() == 0) continue;
                     int span = Math.max(1, e.optInt("daoduSpan", 1));
                     int end = Math.min(total - 1, i + span - 1);
-                    JSONObject one = new JSONObject();
-                    one.put("t", t);
-                    one.put("a", i);
-                    one.put("b", end);
+                    // v1.30.0 注块模型：全量 {t,a,b} 只写块末句，块内其余句
+                    // 只写 {a,b} 标记（与 attachNotes 同口径，a/b 为篇内下标）
+                    JSONObject full = new JSONObject();
+                    full.put("t", t);
+                    full.put("a", i);
+                    full.put("b", end);
+                    JSONObject mark = new JSONObject();
+                    mark.put("a", i);
+                    mark.put("b", end);
                     for (int j = i; j <= end; j++) {
                         JSONObject tgt = ss.getJSONObject(j);
                         JSONObject nt = tgt.optJSONObject("nt");
@@ -556,7 +562,7 @@ public class ContentRepo {
                             nt = new JSONObject();
                             tgt.put("nt", nt);
                         }
-                        nt.put("dd", one);
+                        nt.put("dd", j == end ? full : mark);
                     }
                 }
             }
@@ -572,7 +578,9 @@ public class ContentRepo {
      * 再为每一句判定覆盖它的注块（多块覆盖时取起点最晚的那块，处理集注的嵌套小块），
      * 把判定结果同时写进 Sentence 字段（供竖排原生注栏用）与内容包 JSON 的句子对象
      * （新增 "nt" 字段：{"zj"/"jz"/"gf"/"dd": {"t": 注文, "a": 块首拉平下标, "b": 块末拉平下标}}，
-     * 供阅读页注入）。无注文件/解析失败返回 false，调用方保持原 rawJson 不动。
+     * 供阅读页注入）。v1.30.0 注块模型（只对 daodu）：nt 的 "t" 只落在覆盖段末尾句，
+     * 段内其余句只有 {"a","b"} 标记；其余三家仍逐句带 "t"（详见方法内注）。
+     * 无注文件/解析失败返回 false，调用方保持原 rawJson 不动。
      * 注意：《论语》的单篇 rawJson 拼自 lunyuDoc、本方法写不到那棵树上，dd 在那条
      * 路上由 attachDaoduToDoc 以篇内下标另挂（zj/jz/gf 对论语本无数据，不受影响）。
      */
@@ -620,6 +628,7 @@ public class ContentRepo {
                     ends.add(Math.min(total - 1, i + span - 1));
                     texts.add(t);
                 }
+                int[] bestFor = new int[total];
                 for (int i = 0; i < total; i++) {
                     int best = -1;
                     for (int k = 0; k < starts.size(); k++) {
@@ -628,6 +637,10 @@ public class ContentRepo {
                             best = k;
                         }
                     }
+                    bestFor[i] = best;
+                }
+                for (int i = 0; i < total; i++) {
+                    int best = bestFor[i];
                     if (best < 0) continue;
                     NoteRef ref = new NoteRef();
                     ref.text = texts.get(best);
@@ -643,8 +656,19 @@ public class ContentRepo {
                         nt = new JSONObject();
                         so.put("nt", nt);
                     }
+                    // v1.30.0 注块模型（只对导读 daodu 落地）：注文只在本句是
+                    // 「该注块在导读解析下连续覆盖段的末尾」时写全量 {t,a,b}，
+                    // 段内其余句只写 {a,b} 标记（块归属，供阅读页按当前句定位
+                    // 块尾的注元素）；reader.html 据此把一条导读只在块尾渲染
+                    // 一次、不再逐句重复。直解/集注/耕夫三家维持旧口径逐句写
+                    // 全量 {t,a,b}——三家在现数据里同为块注（直解 61 块、集注
+                    // 65 块、耕夫 111 块），用户定版要求其排版与现状分毫不差，
+                    // 故不套只显一次。原生侧 Sentence 字段仍逐句存覆盖块的
+                    // NoteRef（竖排注栏按当前句取所在块的注，语义不变）。
+                    boolean runEnd = !"daodu".equals(key)
+                            || i == total - 1 || bestFor[i + 1] != best;
                     JSONObject one = new JSONObject();
-                    one.put("t", ref.text);
+                    if (runEnd) one.put("t", ref.text);
                     one.put("a", ref.startFlat);
                     one.put("b", ref.endFlat);
                     nt.put(shortKey, one);
