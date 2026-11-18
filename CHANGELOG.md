@@ -5,7 +5,7 @@
 
 ## [1.29.0] - 2026-11-18
 
-发布提交：（发版时回填） · 对比：https://github.com/gty3310/shixi/compare/v1.28.0...v1.29.0 · 标签 v1.29.0
+发布提交：52dac03 · 对比：https://github.com/gty3310/shixi/compare/v1.28.0...v1.29.0 · 标签 v1.29.0
 
 ### 新增
 - 《论语》第一家注释「lunyu.ai 白话导读」：逐章把经文译成现代白话的导读（站方自称「审校白话导读」，以 1948 年《白话论语读本》——张兆瑢、沈元起编译、公有领域——为底本，经站方现代改写审校）。此前《论语》无任何注文件、阅读页点「注释」无内容，本版补上。版本名按用户定版直接用站名「lunyu.ai 白话导读」；每处注的页脚（横排注块）与竖排注栏页脚写明「导读来源：lunyu.ai」。阅读页选版窗新增第四家、设置「注释版本」分段同步加「白话导读」；默认版本仍为张居正直解，不动
@@ -16,7 +16,7 @@
 ### 验收
 - 数据自验（生成器对账）：499/499 章落位、零低相似落位；抽查 6 章导读逐字一致、块界吻合；两次生成差异仅微子 18.6 一块，截断面已清
 - 模板实跑：node 直跑 reader.html 的 noteFor/noteFooter——选 dd 取 dd 且页脚为「导读来源：lunyu.ai · 本注管第 X–Y 句」；选 zj 仍取 zj（无回归）；只有 dd 时回退 dd 且页脚如实；无 nt 返回 null
-- 构建与包身份：aapt badging 实测 versionCode 53 / versionName 1.29.0；APK 内 assets/notes/lunyu_notes.json 回读可解析（499 块）；dex 内实查 daodu / daoduSpan / 「导读来源：lunyu.ai」/「lunyu.ai 白话导读」字符串齐备；APK size 43009183、md5 66a9f1b2daf9692b7800aaf352e8ef87、sha256 3ca5daf4b6ab1c1dbc6d6f10f92f8f7cc1128f733e9d4f23a9b61a9f498356b2（通道回读在发版段回填）
+- 构建与包身份：aapt badging 实测 versionCode 53 / versionName 1.29.0；BuildInfo 构建短号＝发布提交 52dac03（dex 内实查）；APK 内 assets/notes/lunyu_notes.json 回读可解析（499 块）；dex 内实查 daodu / daoduSpan / 「导读来源：lunyu.ai」/「lunyu.ai 白话导读」字符串齐备；APK size 43009183、md5 d8c1720a53e2e96dad76ddc332829403、sha256 307f5381944f59abf4cd95ce7fb00566d1276d2dd04c5002397b4844abd6e687。通道：GitHub Release 下载回读 size/md5 逐字一致；Drive「安装文件」新版 弦歌-v1290.apk（file/d/1FM1dN1HtijMFamPIPRMmUcf_2dErRgAP）回读 size/md5 一致、旧版 v1.28 已移回收站；Gitee 发行仓已建 Release（id 1322806）并挂 update.json（896 B），但 APK 整件流式上传约 6.5 分钟后被网络掐断（RemoteDisconnected）、附件未落地（无残件，附件列表只有 update.json）——与 v1.27/v1.28 同一症结，App 更新取不到 Gitee 包时自动走 GitHub 兜底、不受影响，补传脚本 ~/workspace/xiange-release-v1290/gitee_apk_v1290.py 幂等、列入补传待办（连同 v1.27/v1.28 两版）
 - 行为层未验：本版为新功能、非修 bug，按规矩不过模拟器；真机上选版窗第四家、横排注块、竖排注栏的实际呈现待用户真机验收
 - 版权口径如实记：导读系 lunyu.ai 站方编辑成果、无开放授权；站方全站无公开邮箱/联系表单、匿名运营，授权申请信已拟好但无处投递。入 App 系用户 2026-11-18 知悉上述状态后的明示决定（此前已定「先抓供个人参考」并拟信问授权，本日改定直接入 App、以站名作版本名）；版本名与每处来源行即署名。若站方日后提出异议，按用户承诺口径处理（配合撤下）
 
