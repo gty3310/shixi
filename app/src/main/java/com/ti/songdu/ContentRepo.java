@@ -55,6 +55,8 @@ public class ContentRepo {
         public NoteRef noteZj;
         public NoteRef noteJz;
         public NoteRef noteGf;
+        /** v1.29.0 覆盖本句的 lunyu.ai 白话导读（仅《论语》有）；无块覆盖时为 null */
+        public NoteRef noteDd;
         /** v1.7 句内可停标点点位（，。；！？，逐字对齐＋静音吸附定时间，个别估算点位
          *  在生成数据时已标记）：breakPos[i] 为标点在 textT 中的 UTF-16 下标（升序），
          *  breakMs[i] 为内容包原始时间轴毫秒（与 startMs 同口径）；无内部点位时为 null */
@@ -263,6 +265,8 @@ public class ContentRepo {
                     lunyuDoc = new JSONObject(raw);
                     // v1.27.0：单篇 rawJson 拼自 lunyuDoc（与 parseBook 独立解析），古读标红也要挂到这份上
                     attachGdToDoc(ctx, bookId, lunyuDoc);
+                    // v1.29.0：白话导读的 nt 同理要挂到这份上（篇内下标口径，见该法注释）
+                    attachDaoduToDoc(ctx, lunyuDoc);
                 } catch (Exception ignored) {
                 }
             }
@@ -367,7 +371,9 @@ public class ContentRepo {
             }
             // v1.9.0：《大学》《中庸》挂注释（assets/notes/<bookId>_notes.json）；
             // 挂上后把带注的 JSON 重新序列化为 rawJson，阅读页注入即带注。
-            // 《论语》与用户导入书无注文件，attachNotes 直接返回 false、零回退。
+            // v1.29.0：《论语》也有注文件了（仅 lunyu.ai 白话导读一家，数据由
+            // tools/gen_lunyu_daodu.py 生成）；用户导入书无注文件，attachNotes
+            // 直接返回 false、零回退。
             boolean noted = attachNotes(ctx, b, sentObjs);
             boolean gded = attachGdMarks(ctx, b.bookId, sentObjs);
             if (noted || gded) {
@@ -497,14 +503,78 @@ public class ContentRepo {
         }
     }
 
+    // ---------- v1.29.0 lunyu.ai 白话导读挂载（论语整本文档路） ----------
+    // 阅读页对《论语》按篇取 Book、rawJson 拼自 lunyuDoc（chapterRawJson），
+    // parseBook 里的 attachNotes 写的是另一棵 JSON 树、到不了这条路，故仿
+    // attachGdToDoc 在此对 lunyuDoc 再挂一份。数据同源：assets/notes/
+    // lunyu_notes.json（{句id: {daodu, daoduSpan}}，生成器 gen_lunyu_daodu.py）。
+    // 与整本口径的唯一差别：nt.dd 的 a/b 是「篇内」拉平下标——单篇渲染时
+    // reader.html 的句序号从本篇 0 起，页脚「本注管第 X–Y 句」按篇内数才对。
+    // 导读注块由生成器按章切分、块间不重叠不嵌套，逐块直写即可；无数据零回退。
+
+    private static JSONObject lunyuNotesCache;
+
+    private static JSONObject lunyuNotesData(Context ctx) {
+        if (lunyuNotesCache != null) return lunyuNotesCache;
+        JSONObject data = null;
+        try {
+            InputStream in = ctx.getAssets().open("notes/lunyu_notes.json");
+            byte[] buf = new byte[in.available()];
+            int n = in.read(buf);
+            in.close();
+            if (n > 0) data = new JSONObject(new String(buf, 0, n, StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
+        lunyuNotesCache = data;
+        return data;
+    }
+
+    private static void attachDaoduToDoc(Context ctx, JSONObject doc) {
+        JSONObject notes = lunyuNotesData(ctx);
+        if (notes == null || doc == null) return;
+        try {
+            JSONArray chs = doc.getJSONArray("chapters");
+            for (int c = 0; c < chs.length(); c++) {
+                JSONArray ss = chs.getJSONObject(c).getJSONArray("sentences");
+                int total = ss.length();
+                for (int i = 0; i < total; i++) {
+                    JSONObject so = ss.getJSONObject(i);
+                    JSONObject e = notes.optJSONObject(so.optString("id", ""));
+                    if (e == null || e.isNull("daodu")) continue;
+                    String t = e.optString("daodu", null);
+                    if (t == null || t.length() == 0) continue;
+                    int span = Math.max(1, e.optInt("daoduSpan", 1));
+                    int end = Math.min(total - 1, i + span - 1);
+                    JSONObject one = new JSONObject();
+                    one.put("t", t);
+                    one.put("a", i);
+                    one.put("b", end);
+                    for (int j = i; j <= end; j++) {
+                        JSONObject tgt = ss.getJSONObject(j);
+                        JSONObject nt = tgt.optJSONObject("nt");
+                        if (nt == null) {
+                            nt = new JSONObject();
+                            tgt.put("nt", nt);
+                        }
+                        nt.put("dd", one);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     /**
      * v1.9.0 注释挂载：注数据文件结构 {sentenceId: {zhijie, jizhu, gengfu, zhijieSpan,
-     * jizhuSpan, gengfuSpan}}（gengfu＝《耕夫讲经典》，v1.20.5 加入的第三家，仅《大学》有），
+     * jizhuSpan, gengfuSpan}}（gengfu＝《耕夫讲经典》，v1.20.5 加入的第三家，仅《大学》有；
+     * v1.29.0 加入第四家 daodu＝lunyu.ai 白话导读，仅《论语》有），
      * 注文只挂在块首句、span 为该块覆盖的句数（块注）。本方法对每个版本先收集全部注块，
      * 再为每一句判定覆盖它的注块（多块覆盖时取起点最晚的那块，处理集注的嵌套小块），
      * 把判定结果同时写进 Sentence 字段（供竖排原生注栏用）与内容包 JSON 的句子对象
-     * （新增 "nt" 字段：{"zj"/"jz"/"gf": {"t": 注文, "a": 块首拉平下标, "b": 块末拉平下标}}，
+     * （新增 "nt" 字段：{"zj"/"jz"/"gf"/"dd": {"t": 注文, "a": 块首拉平下标, "b": 块末拉平下标}}，
      * 供阅读页注入）。无注文件/解析失败返回 false，调用方保持原 rawJson 不动。
+     * 注意：《论语》的单篇 rawJson 拼自 lunyuDoc、本方法写不到那棵树上，dd 在那条
+     * 路上由 attachDaoduToDoc 以篇内下标另挂（zj/jz/gf 对论语本无数据，不受影响）。
      */
     private static boolean attachNotes(Context ctx, Book b, List<JSONObject> sentObjs) {
         String raw;
@@ -534,7 +604,7 @@ public class ContentRepo {
             JSONObject notes = new JSONObject(raw);
             int total = b.flat.size();
             boolean any = false;
-            String[][] vers = {{"zhijie", "zj"}, {"jizhu", "jz"}, {"gengfu", "gf"}};
+            String[][] vers = {{"zhijie", "zj"}, {"jizhu", "jz"}, {"gengfu", "gf"}, {"daodu", "dd"}};
             for (String[] v : vers) {
                 String key = v[0], shortKey = v[1];
                 List<Integer> starts = new ArrayList<>();
@@ -565,6 +635,7 @@ public class ContentRepo {
                     ref.endFlat = ends.get(best);
                     if ("zhijie".equals(key)) b.flat.get(i).noteZj = ref;
                     else if ("jizhu".equals(key)) b.flat.get(i).noteJz = ref;
+                    else if ("daodu".equals(key)) b.flat.get(i).noteDd = ref;
                     else b.flat.get(i).noteGf = ref;
                     JSONObject so = sentObjs.get(i);
                     JSONObject nt = so.optJSONObject("nt");

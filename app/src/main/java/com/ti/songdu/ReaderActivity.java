@@ -176,7 +176,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         scale = ContentRepo.scaleFor(track, book);
         buildTimeline();
         for (ContentRepo.Sentence s : book.flat) {
-            if (s.noteZj != null || s.noteJz != null || s.noteGf != null) { hasNotes = true; break; }
+            if (s.noteZj != null || s.noteJz != null || s.noteGf != null || s.noteDd != null) { hasNotes = true; break; }
         }
 
         prefs = getSharedPreferences("reader_prefs", MODE_PRIVATE);
@@ -425,7 +425,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     /**
      * v1.10.2 选版小窗：只在用户亲手点开「注释」时弹（页面重建恢复开态不走这里）。
-     * 三个版本各一块：标题＋一小行说明；上次所选带 ✓ 并高亮。点某一块即
+     * 四个版本各一块（v1.29.0 加入 lunyu.ai 白话导读）：标题＋一小行说明；上次所选带 ✓ 并高亮。点某一块即
      * 选定＋关窗＋开启注释（一步完成）；「取消」或点外关闭则保持关闭、什么都不改。
      */
     private void showNoteVerChooser() {
@@ -449,6 +449,12 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         root.addView(noteVerOption(density, "gengfu",
                 "耕夫讲经典",
                 "把《大学》逐句讲透的讲录整理，白话细密、处处落到修身做人。适合想听人把经文讲活、再对照自己日子的人。"));
+        View gap3 = new View(this);
+        root.addView(gap3, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (int) (10 * density)));
+        root.addView(noteVerOption(density, "daodu",
+                "lunyu.ai 白话导读",
+                "《论语》专用：逐章译成现代白话，只讲大意、几乎不绕，适合先求顺畅读懂的同学。少数长章站方只给了前半段导读。导读来源：lunyu.ai。"));
         final AlertDialog[] dlg = new AlertDialog[1];
         for (int i = 0; i < root.getChildCount(); i++) {
             final View child = root.getChildAt(i);
@@ -513,15 +519,18 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     }
 
     /** 本句要显示的注：优先选定版本，无块覆盖才按固定次序回退其他家；
-     *  usedVer[0] 回报实际用的哪家（"zhijie"/"jizhu"/"gengfu"） */
+     *  usedVer[0] 回报实际用的哪家（"zhijie"/"jizhu"/"gengfu"/"daodu"） */
     private ContentRepo.NoteRef displayNote(ContentRepo.Sentence s, String[] usedVer) {
-        String[] order;
-        if ("jizhu".equals(notesVer)) order = new String[]{"jizhu", "zhijie", "gengfu"};
-        else if ("gengfu".equals(notesVer)) order = new String[]{"gengfu", "zhijie", "jizhu"};
-        else order = new String[]{"zhijie", "jizhu", "gengfu"};
+        String[] all = {"zhijie", "jizhu", "gengfu", "daodu"};
+        java.util.List<String> order = new java.util.ArrayList<>();
+        order.add(notesVer);
+        for (String v : all) {
+            if (!v.equals(notesVer)) order.add(v);
+        }
         for (String v : order) {
             ContentRepo.NoteRef r = "zhijie".equals(v) ? s.noteZj
-                    : "jizhu".equals(v) ? s.noteJz : s.noteGf;
+                    : "jizhu".equals(v) ? s.noteJz
+                    : "gengfu".equals(v) ? s.noteGf : s.noteDd;
             if (r != null) {
                 usedVer[0] = v;
                 return r;
@@ -530,10 +539,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         return null;
     }
 
-    /** 注栏页脚的版本名（实际显示的那家） */
+    /** 注栏页脚的版本名（实际显示的那家）；导读一家按用户定版口径直接写来源行 */
     private static String noteVerLabel(String ver) {
         if ("jizhu".equals(ver)) return "朱熹的版本";
         if ("gengfu".equals(ver)) return "耕夫讲经典";
+        if ("daodu".equals(ver)) return "导读来源：lunyu.ai";
         return "张居正的版本";
     }
 
@@ -1426,7 +1436,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         buildTimeline();
         hasNotes = false;
         for (ContentRepo.Sentence s : book.flat) {
-            if (s.noteZj != null || s.noteJz != null || s.noteGf != null) { hasNotes = true; break; }
+            if (s.noteZj != null || s.noteJz != null || s.noteGf != null || s.noteDd != null) { hasNotes = true; break; }
         }
         curSentence = -1;
         curClause = -1;

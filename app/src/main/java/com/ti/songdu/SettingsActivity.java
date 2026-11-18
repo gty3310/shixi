@@ -161,12 +161,14 @@ public class SettingsActivity extends Activity {
 
         addShowRow(root, "识读", "showReciteBtn");
 
-        addSegRow(root, "注释版本", new String[]{"张居正", "朱熹", "耕夫"},
+        addSegRow(root, "注释版本", new String[]{"张居正", "朱熹", "耕夫", "白话导读"},
                 "jizhu".equals(readerPrefs.getString("notesVer", "zhijie")) ? 1
-                        : "gengfu".equals(readerPrefs.getString("notesVer", "zhijie")) ? 2 : 0,
+                        : "gengfu".equals(readerPrefs.getString("notesVer", "zhijie")) ? 2
+                        : "daodu".equals(readerPrefs.getString("notesVer", "zhijie")) ? 3 : 0,
                 idx -> readerPrefs.edit()
                         .putString("notesVer",
-                                idx == 1 ? "jizhu" : idx == 2 ? "gengfu" : "zhijie").apply());
+                                idx == 1 ? "jizhu" : idx == 2 ? "gengfu"
+                                        : idx == 3 ? "daodu" : "zhijie").apply());
         addShowRow(root, "注释", "showNotesBtn");
 
         addDivider(root);
