@@ -5,7 +5,7 @@
 
 ## [1.30.0] - 2026-11-19
 
-发布提交：待回填 · 对比：https://github.com/gty3310/shixi/compare/v1.29.0...v1.30.0 · 标签 v1.30.0
+发布提交：37bab0d · 对比：https://github.com/gty3310/shixi/compare/v1.29.0...v1.30.0 · 标签 v1.30.0
 
 ### 新增
 - 《论语》主页主卡改与《大学》《中庸》同式样：折叠头由旧汇总行（今日读了 X 篇 · 共 Y 遍）改为书名＋今日大字遍数（朱砂 30sp）＋统计行（沿用户勾选时段，默认今日·本周·上周·本月·总计）。各档口径：均为分章账（chapter_stats.json，与 v1.26 分章遍数同一本账）逐篇求和后 ÷20 篇折算、一位小数四舍五入（BookCountFormat.wholeBook 与 wholeBookToday 共用同一实现）；本周＝本周一至今日、上周＝上周一至上周日、本月＝本月 1 日至今日、总计＝分章账全部日期（沿 Store 既有日期口径）；ChapterStatsStore 新增 bookSumBetween / chapterSumBetween 区间合计。「本月进度 N/20 篇」缩为次要信息保留在今日行右端。无分章账的书组维持旧式样不变；大学/中庸整本书卡未动
@@ -22,7 +22,7 @@
 - 计数 harness：新增 tools/chapteredit_harness/ChapterEditHarness 36 项全过——输入解析（空/负数/非数字/超 int 上限拦截、大数 9999 通过）、步进下限 0/上限封顶、模拟分章账改篇后整本今日一位小数（5÷20＝0.3，HALF_UP）与五档聚合（今日/本周/上周/本月/总计）逐项对、负数目标拦截、清零后整本归零；BookCountHarness 11 项、CompletionHarness 13 项回归全过。如实：harness 的区间求和以镜像账本复刻 ChapterStatsStore 的键与 Store 日期口径（真实类依赖 org.json、桌面无直跑路径），真实类以 diff 逐行复核覆盖
 - 注块数据对账（真实书数据离线模拟新挂载）：《论语》导读 499 块＝499 个全量落点、覆盖 1523 句，与 v1.29 生成报告（tools/lunyu_daodu_report.md）逐篇块数全对；子罕篇块 [52,53]（第 53–54 句）：第 53 句只有 {a,b} 标记、第 54 句为唯一全量落点
 - 模板实跑：tools/reader_note_harness/note_template_test.js（node 抽 reader.html 真实函数＋真实子罕数据，数据文件同目录 zihan_flat.json）20 项全过——子罕 81 句只渲染 30 个注元素（＝块数）、第 53 句无注元素、第 54 句含该块导读且全文只出现一次、dd 页脚空串、markNote 块内两句亮同一份块尾元素、三家页脚文案与逐句渲染/markNote 旧口径不变
-- 构建与包身份、通道：待回填
+- 构建与包身份、通道：aapt badging 实测 versionCode 54 / versionName 1.30.0；BuildInfo 构建短号＝发布提交 37bab0d（dex 内实查）；包内 reader.html 实查 noteEndFor 在位、dd 页脚返回空串、「导读来源」零出现，help.html 同为零出现；dex 内「导读来源：lunyu.ai」仅存选版窗/设置说明与 v1.29 历史条目共 3 处（非注页脚路径）。APK size 43013279、md5 3aa8e1ebb6eb66ff910fb60d89d1494f、sha256 5ca9092c76ee274bad9e2f379ce1d1571b3dfc26db2a1f2ee36578a13603e909。通道：GitHub Release 下载回读 size/md5 逐字一致；Drive「安装文件」新版 弦歌-v1300.apk（file/d/11EAT0KE7NeJh88jFVbMGp78vwjLdQs9e）回读 size/md5 一致、旧版 v1.29 已移回收站；Gitee 发行仓已建 Release（id 1325942）并挂 update.json（875 B，与本地逐字同 size），且 APK 整件本次上传成功落地（43,013,279 B，与本地同 size）——v1.27–v1.29 连续三版被网络掐断的 Gitee 附件缺口在本版补齐（三版旧附件仍缺，补传脚本各自留存、仍列待办）
 - 行为层未验：本版为功能改动、非修 bug，按规矩不过模拟器；主页新卡、篇行编辑弹框、注块排版在真机上的呈现待用户真机验收
 
 ## [1.29.0] - 2026-11-18
