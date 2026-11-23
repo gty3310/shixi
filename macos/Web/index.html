@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>弦歌</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="gdon noteson">
+<div class="app">
+  <header class="toolbar">
+    <div class="brand">弦歌</div>
+    <div class="tools">
+      <label class="tgl"><input type="checkbox" id="optPinyin" checked> 拼音</label>
+      <label class="tgl"><input type="checkbox" id="optGd" checked> 古读标红</label>
+      <label class="tgl"><input type="checkbox" id="optNotes" checked> 注释</label>
+      <select id="optVer" title="注释版本"></select>
+      <span class="sep"></span>
+      <button id="optTrad" class="seg on" title="简繁切换">繁體</button>
+      <button id="optVert" class="seg" title="横竖排切换">竖排</button>
+    </div>
+  </header>
+  <div class="main">
+    <aside class="sidebar">
+      <div class="side-h">书目</div>
+      <div id="bookList"></div>
+      <div class="side-h" id="chapHead">篇章</div>
+      <div id="chapList"></div>
+    </aside>
+    <section class="reader-wrap">
+      <div id="notePanel" class="note-panel" hidden>
+        <div class="np-h">注栏（点句查看）</div>
+        <div id="notePanelBody" class="np-b">点一句，显示它所在注块的注释。</div>
+      </div>
+      <div id="reader" class="reader"><div class="txt" id="txt"></div></div>
+    </section>
+  </div>
+</div>
+<script src="bookdata.js"></script>
+<script src="render.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

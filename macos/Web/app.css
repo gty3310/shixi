@@ -1,0 +1,79 @@
+/* 弦歌 Mac 版 · 横版样式
+   视觉口径与安卓 reader.html 一致：宣纸米白 #F8F5EF、墨色 #26221C、
+   朱砂 #9E3B2B、古读红 #C8401F；宋体。左栏书目/篇章，右阅读区。 */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;background:#F8F5EF;color:#26221C;}
+body{font-family:"Songti SC","Noto Serif CJK SC","Noto Serif SC",serif;}
+.app{display:flex;flex-direction:column;height:100vh;}
+
+/* ---------- 工具栏 ---------- */
+.toolbar{display:flex;align-items:center;gap:18px;padding:0 16px;height:48px;
+  border-bottom:1px solid #E2D9C6;background:#FBF9F4;flex:none;}
+.brand{font-size:19px;font-weight:700;letter-spacing:.35em;color:#9E3B2B;}
+.tools{margin-left:auto;display:flex;align-items:center;gap:14px;font-size:13.5px;}
+.tgl{display:flex;align-items:center;gap:5px;cursor:pointer;user-select:none;}
+.tgl input{accent-color:#9E3B2B;}
+#optVer{font-family:inherit;font-size:13.5px;color:#26221C;background:#fff;
+  border:1px solid #CBBFA3;border-radius:6px;padding:3px 6px;}
+.sep{width:1px;height:20px;background:#DDD2BA;}
+.seg{font-family:inherit;font-size:13.5px;color:#6E6455;background:transparent;
+  border:1px solid #CBBFA3;border-radius:999px;padding:3px 12px;cursor:pointer;}
+.seg.on{color:#fff;background:#9E3B2B;border-color:#9E3B2B;}
+
+/* ---------- 主区 ---------- */
+.main{display:flex;flex:1;min-height:0;}
+
+/* 左栏 */
+.sidebar{width:288px;flex:none;border-right:1px solid #E2D9C6;background:#F3EEE1;
+  overflow-y:auto;padding:14px 12px 20px;}
+.side-h{font-size:12.5px;color:#9a8f7d;letter-spacing:.25em;margin:10px 4px 8px;}
+.book{display:flex;align-items:baseline;gap:8px;width:100%;text-align:left;
+  font-family:inherit;padding:10px 12px;margin-bottom:6px;cursor:pointer;
+  background:#FBF9F4;border:1px solid #E2D9C6;border-radius:10px;color:#26221C;}
+.book .bt{font-size:19px;font-weight:700;letter-spacing:.12em;}
+.book .bc{margin-left:auto;font-size:12.5px;color:#9a8f7d;}
+.book.on{border-color:#9E3B2B;background:#fff;box-shadow:0 0 0 1px #9E3B2B inset;}
+.chap{display:block;width:100%;text-align:left;font-family:inherit;font-size:14.5px;
+  padding:7px 12px;margin-bottom:2px;cursor:pointer;background:transparent;
+  border:none;border-radius:8px;color:#3d382e;}
+.chap:hover{background:rgba(158,59,43,.07);}
+.chap.on{background:rgba(158,59,43,.13);color:#8A3226;font-weight:700;}
+
+/* 阅读区 */
+.reader-wrap{flex:1;display:flex;min-width:0;}
+.reader{flex:1;overflow-y:auto;min-width:0;}
+.txt{padding:26px 44px 60px;line-height:2.15;font-size:21px;max-width:900px;margin:0 auto;}
+body.nopy rt{display:none}
+body.nopy .txt{line-height:1.95}
+ruby rt{font-size:.40em;color:#9a8f7d;}
+body.gdon ruby.gd rt{color:#C8401F;font-weight:bold;}
+section.ch h2{font-size:1.02em;line-height:1.5;color:#9E3B2B;margin:1.1em 0 .45em;
+  font-weight:700;letter-spacing:.04em;}
+section.ch:first-child h2{margin-top:.15em}
+.ch-note{font-size:.72em;color:#A97C2C;margin:-.25em 0 .55em;}
+p{margin:0;text-align:justify;}
+.s{border-bottom:2px solid transparent;padding-bottom:1px;}
+.s.cur{background:rgba(158,59,43,.14);border-bottom-color:#9E3B2B;}
+/* 注块：句后同级块，左细线＋浅底与正文分层（同安卓 .ntb） */
+.ntb{display:none;}
+body.noteson .ntb{display:block;font-size:.72em;line-height:1.55;color:#6E6455;
+  background:rgba(169,124,44,.07);border-left:3px solid #D8CDB4;
+  padding:.5em .75em;margin:.4em 0 .9em;text-align:justify;}
+.ntb .ntf{display:block;margin-top:.35em;font-size:.86em;color:#A97C2C;user-select:none;}
+.ntb.cur{border-left-color:#9E3B2B;background:rgba(158,59,43,.12);}
+.ntb.cur .ntt{color:#8A3226;}
+.loading{padding:60px 0;text-align:center;color:#9a8f7d;font-size:15px;}
+
+/* ---------- 竖排 ---------- */
+/* 竖排时注块不进列流（同安卓竖排口径），改走左侧注栏点句查看 */
+.note-panel{width:264px;flex:none;border-right:1px solid #E2D9C6;background:#F3EEE1;
+  padding:16px 14px;overflow-y:auto;}
+.np-h{font-size:12.5px;color:#9a8f7d;letter-spacing:.25em;margin-bottom:10px;}
+.np-b{font-size:14.5px;line-height:1.7;color:#3d382e;text-align:justify;}
+.np-b .ntf{display:block;margin-top:.5em;font-size:.86em;color:#A97C2C;}
+body.vert .reader{overflow-x:auto;overflow-y:hidden;}
+body.vert .txt{writing-mode:vertical-rl;-webkit-writing-mode:vertical-rl;
+  height:100%;max-width:none;margin:0;padding:30px 36px;}
+body.vert .ntb{display:none !important;}
+body.vert section.ch h2{margin:0 .35em 0 .95em;}
+body.vert p{text-align:start;}
