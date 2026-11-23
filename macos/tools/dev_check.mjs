@@ -8,6 +8,8 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const XGBookData = require('../Web/bookdata.js');
 const XGRender = require('../Web/render.js');
+const XGStats = require('../Web/stats.js');
+const XGPlayCore = require('../Web/playcore.js');
 
 const REPO = new URL('../../', import.meta.url).pathname;
 const ASSETS = REPO + 'app/src/main/assets/';
@@ -131,6 +133,118 @@ ok(XGRender.noteHTML(ziHan.sentences[53], 'dd').includes('譬如为山') ||
    XGRender.noteEndFor(ziHan.sentences[53], 'dd') !== null,
   '子罕第 54 句可渲染导读注块');
 ok(XGRender.noteFooter({ ver: 'dd', a: 0, b: 1 }) === '', '导读注块不出页脚行');
+
+// ---------- v0.2.0 遍数账（stats.js，安卓口径移植） ----------
+console.log('遍数账（v0.2.0）');
+// 日期边界：2026-11-22 是周日、11-23 是周一
+ok(XGStats.mondayOf('2026-11-22') === '2026-11-16', '周日的本周一为 11-16');
+ok(XGStats.mondayOf('2026-11-23') === '2026-11-23', '周一的本周一为当日');
+{
+  const r = XGStats.ranges('2026-11-23');
+  ok(r.week[0] === '2026-11-23' && r.week[1] === '2026-11-23', '本周区间 [本周一, 今日]');
+  ok(r.lastWeek[0] === '2026-11-16' && r.lastWeek[1] === '2026-11-22', '上周区间 [上周一, 上周日]');
+  ok(r.month[0] === '2026-11-01' && r.month[1] === '2026-11-23', '本月区间 [1 日, 今日]');
+}
+// 整本折算（BookCountFormat 例：论语 7 章→0.4、9 章→0.5）
+ok(XGStats.wholeBook(7, 20) === '0.4', '折算 7/20 → 0.4');
+ok(XGStats.wholeBook(9, 20) === '0.5', '折算 9/20 → 0.5（0.45 进位）');
+ok(XGStats.wholeBook(0, 20) === '0.0', '折算 0 → 0.0');
+ok(XGStats.wholeBook(25, 12) === '2.1', '折算 25/12 → 2.1');
+ok(XGStats.wholeBook(5, 0) === '0.0', '折算章数 0 → 0.0');
+// 编辑校验（ChapterTodayEdit 移植）
+ok(XGStats.parseEditInput('3') === 3, '输数解析「3」');
+ok(XGStats.parseEditInput(' 12 ') === 12, '输数解析带空格「12」');
+ok(XGStats.parseEditInput('') === null, '输数空 → 拦截');
+ok(XGStats.parseEditInput('-1') === null, '输数负数 → 拦截');
+ok(XGStats.parseEditInput('abc') === null, '输数非数字 → 拦截');
+ok(XGStats.parseEditInput('9999999999999') === null, '输数超 int 上限 → 拦截');
+ok(XGStats.stepped(0, -1) === 0 && XGStats.stepped(5, 1) === 6, '步进钳制下限 0');
+// 写回语义：auto/manual 分路、adjust 先扣 m 再扣 a、下限 0、条目清理
+{
+  const st = XGStats.createStore();
+  const D = '2026-11-23';
+  st.addAuto('daxue', 0, D, 2);
+  st.addManual('daxue', 0, D, 1);
+  ok(st.chapterToday('daxue', 0, D) === 3, '今日合计 a2+m1 = 3');
+  st.adjustChapterToday('daxue', 0, D, -2); // 先扣 m(1) 再扣 a(1) → a=1,m=0
+  ok(st.chapterToday('daxue', 0, D) === 1, '减 2 后今日 = 1（先扣手动）');
+  st.adjustChapterToday('daxue', 0, D, -5); // 下限 0、条目删除
+  ok(st.chapterToday('daxue', 0, D) === 0 && !('daxue|0|' + D in JSON.parse(st.dump())),
+    '减到 0 条目清理');
+  st.adjustChapterToday('daxue', 0, D, 3); // 增加入 m 路
+  const e = JSON.parse(st.dump())['daxue|0|' + D];
+  ok(e && e.a === 0 && e.m === 3, '增加入 manual 路');
+  // 落盘往返
+  const st2 = XGStats.loadStore(st.dump());
+  ok(st2.chapterToday('daxue', 0, D) === 3, '序列化往返一致');
+}
+// 五档聚合：跨周/月种子数据（今日 = 2026-11-23 周一）
+{
+  const st = XGStats.createStore();
+  for (let i = 0; i < 7; i++) st.addAuto('lunyu', i, '2026-11-23', 1); // 今日 7 章
+  st.addAuto('lunyu', 0, '2026-11-20', 3);  // 上周（11-16~11-22）
+  st.addAuto('lunyu', 1, '2026-11-05', 2);  // 本月内、上周之前
+  st.addAuto('lunyu', 2, '2026-10-31', 5);  // 上月（只入总计）
+  const card = st.bookCardStats('lunyu', 20, '2026-11-23');
+  ok(card.today === '0.4', '书卡今日 7/20 → 0.4（实测 ' + card.today + '）');
+  ok(card.week === '0.4', '书卡本周 = 今日（周一）');
+  ok(card.lastWeek === '0.2', '书卡上周 3/20 → 0.2（实测 ' + card.lastWeek + '）');
+  ok(card.month === '0.6', '书卡本月 12/20 → 0.6（实测 ' + card.month + '）');
+  ok(card.total === '0.9', '书卡总计 17/20 → 0.9（实测 ' + card.total + '）');
+}
+
+// ---------- v0.2.0 播放纯逻辑（playcore.js，ChapterProgressTracker 移植） ----------
+console.log('播放逻辑（v0.2.0）');
+ok(XGPlayCore.thresholdFor(0, 10000) === 1000, '阈值 章长 10s → 1000ms');
+ok(XGPlayCore.thresholdFor(0, 3000) === 500, '阈值下限 500ms');
+ok(XGPlayCore.thresholdFor(0, 100000) === 2000, '阈值上限 2000ms');
+{
+  const tr = XGPlayCore.createTracker();
+  tr.setChapters([0, 10000, 25000], [10000, 25000, 40000]);
+  ok(JSON.stringify(tr.feed(0, true)) === '[]', '进入首章不计数');
+  ok(JSON.stringify(tr.feed(5000, true)) === '[]', '章内推进不计数');
+  ok(JSON.stringify(tr.feed(10050, true)) === '[0]', '自然越过章界计第 0 章');
+  ok(tr.currentChapter() === 1, '越界后当前章 = 1');
+}
+{
+  // 拖到章尾附近再播完：未 armed 不计（防误计基线）
+  const tr = XGPlayCore.createTracker();
+  tr.setChapters([0, 10000, 25000], [10000, 25000, 40000]);
+  tr.feed(24000, true); // 进入第 1 章时已过基线（25000-1500）
+  ok(JSON.stringify(tr.feed(25100, true)) === '[]', '章尾附近进入、越界不计');
+  ok(tr.currentChapter() === 2, '不计但当前章推进到 2');
+}
+{
+  // 暂停喂拍只同步位置；整轨播完 flush 兜底；resetToChapter 从章首 armed
+  const tr = XGPlayCore.createTracker();
+  tr.setChapters([0, 10000, 25000], [10000, 25000, 40000]);
+  tr.feed(26000, false);
+  ok(tr.currentChapter() === -1, '未播放喂拍不判定');
+  tr.feed(26000, true);
+  tr.feed(30000, true);
+  ok(tr.flushAtTrackEnd() === 2, '播完 flush 计末章');
+  ok(tr.flushAtTrackEnd() === -1, 'flush 不重复计');
+  tr.resetToChapter(1, 10000);
+  ok(tr.isArmed(), 'resetToChapter 章首起步 armed');
+  ok(JSON.stringify(tr.feed(25100, true)) === '[1]', '章首播起越界计第 1 章');
+}
+// 章界表与句定位（真实数据）
+{
+  const b = XGPlayCore.chapterBounds(daxue);
+  ok(b.length === 12, '大学章界表 12 章');
+  ok(b[0].start === daxue.flat[0].startMs && b[11].end <= daxue.audioDurationMs,
+    '大学章界首尾与时间轴对齐');
+  let mono = true;
+  for (let i = 1; i < b.length; i++) if (b[i].start < b[i - 1].end) mono = false;
+  ok(mono, '大学章界单调不重叠');
+  const bl = XGPlayCore.chapterBounds(lunyu);
+  ok(bl.length === 20 && bl[19].end <= lunyu.audioDurationMs, '论语章界表 20 篇');
+  ok(XGPlayCore.sentenceIndexAt(daxue, daxue.flat[0].startMs) === 0, '句定位 首句');
+  ok(XGPlayCore.sentenceIndexAt(daxue, daxue.flat[142].startMs) === 142, '句定位 末句');
+  ok(XGPlayCore.sentenceIndexAt(daxue, daxue.flat[10].startMs + 10) === 10, '句定位 句中');
+  ok(XGPlayCore.chapterOfFlat(lunyu, 0) === 0 && XGPlayCore.chapterOfFlat(lunyu, 1584) === 19,
+    '拉平下标所属章（论语首尾）');
+}
 
 console.log(fails === 0 ? '\n全部通过' : '\n失败 ' + fails + ' 项');
 process.exit(fails === 0 ? 0 : 1);

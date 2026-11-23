@@ -34,9 +34,53 @@
       <div id="reader" class="reader"><div class="txt" id="txt"></div></div>
     </section>
   </div>
+  <footer class="player" id="playerBar">
+    <div class="pl-meta">
+      <div class="pl-chap" id="plChap">听读</div>
+      <div class="pl-book" id="plBook"></div>
+    </div>
+    <div class="pl-main">
+      <button id="plBack" class="pl-btn" title="后退 15 秒">−15</button>
+      <button id="plPlay" class="pl-btn pl-play" title="播放 / 暂停">▶</button>
+      <button id="plFwd" class="pl-btn" title="前进 15 秒">+15</button>
+      <span class="pl-time" id="plCur">0:00</span>
+      <input type="range" id="plSeek" min="0" max="0" step="0.1" value="0">
+      <span class="pl-time" id="plDur">0:00</span>
+    </div>
+    <div class="pl-side">
+      <button id="plLoop" class="pl-chip" title="循环模式（点击切换）">顺序播放</button>
+      <select id="plRate" title="倍速">
+        <option value="0.75">0.75×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2×</option>
+      </select>
+      <button id="plAddAudio" class="pl-chip" title="为当前书选择本地音频文件">添加音频</button>
+    </div>
+  </footer>
 </div>
+<div class="modal-mask" id="editMask" hidden>
+  <div class="modal">
+    <div class="md-title" id="editTitle">今日遍数</div>
+    <div class="md-row">
+      <button id="editMinus" class="md-step" title="减一">−</button>
+      <input id="editInput" type="text" inputmode="numeric" autocomplete="off">
+      <button id="editPlus" class="md-step" title="加一">＋</button>
+    </div>
+    <div class="md-err" id="editErr"></div>
+    <div class="md-btns">
+      <button id="editCancel" class="md-btn">取消</button>
+      <button id="editSave" class="md-btn on">存</button>
+    </div>
+  </div>
+</div>
+<audio id="audioEl" preload="auto"></audio>
 <script src="bookdata.js"></script>
 <script src="render.js"></script>
+<script src="stats.js"></script>
+<script src="playcore.js"></script>
+<script src="player.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

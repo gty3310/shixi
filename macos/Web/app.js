@@ -1,6 +1,9 @@
 /* 弦歌 Mac 版 · 页面装配（仅浏览器/WKWebView 环境）
- * v0.1.0 纯阅读：选书选章、横排/竖排阅读、拼音与古读标红开关、
- * 注释版本切换、注块只在句组末尾显示一次。无播放、无遍数、无笔记。
+ * v0.1.0 阅读：选书选章、横排/竖排、拼音与古读标红开关、注释版本切换、
+ * 注块只在句组末尾显示一次。
+ * v0.2.0 听读：原生桥（选音频/书签、遍数账落盘）或浏览器回退
+ * （文件选择 + localStorage）；书卡五档统计、篇章行「今日 X 遍」可点改、
+ * 播放器（player.js）计数回调写 auto 账。
  */
 (function () {
   'use strict';
@@ -23,6 +26,77 @@
   var $ = function (id) { return document.getElementById(id); };
   var txtEl = $('txt'), readerEl = $('reader');
 
+  // ---------- 原生桥 / 浏览器回退 ----------
+
+  var hasNative = !!(window.webkit && window.webkit.messageHandlers &&
+                     window.webkit.messageHandlers.xiange);
+  function post(obj) {
+    if (hasNative) window.webkit.messageHandlers.xiange.postMessage(obj);
+  }
+
+  var audioState = {}; // bookId -> {bound, name, url?}（url 仅浏览器回退）
+  var stats = XGStats.loadStore(null);
+
+  function persistStats() {
+    var text = stats.dump();
+    if (hasNative) post({ cmd: 'saveStats', json: text });
+    else {
+      try { localStorage.setItem('xiange.chapter_stats', text); } catch (e) {}
+    }
+  }
+
+  function audioUrlFor(bookId) {
+    var st = audioState[bookId];
+    if (!st || !st.bound) return null;
+    if (hasNative) return 'xiange://audio/' + bookId;
+    return st.url || null;
+  }
+
+  window.XGNative = {
+    onStats: function (text) {
+      stats = XGStats.loadStore(text || null);
+      refreshCounts();
+    },
+    onAudioState: function (st) {
+      audioState = st || {};
+      applyAudioState();
+    }
+  };
+
+  // 浏览器回退：用文件选择给当前书绑定音频（对象 URL，仅本次会话）
+  var pendingPick = null;
+  var fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'audio/*';
+  fileInput.style.display = 'none';
+  document.body.appendChild(fileInput);
+  fileInput.addEventListener('change', function () {
+    var f = fileInput.files && fileInput.files[0];
+    if (f && pendingPick) {
+      audioState[pendingPick] = {
+        bound: true, name: f.name, url: URL.createObjectURL(f)
+      };
+      applyAudioState();
+    }
+    pendingPick = null;
+    fileInput.value = '';
+  });
+
+  function requestAudio(bookId) {
+    if (hasNative) post({ cmd: 'pickAudio', bookId: bookId });
+    else { pendingPick = bookId; fileInput.click(); }
+  }
+
+  function applyAudioState() {
+    renderBookList();
+    if (player) {
+      player.setAudioUrl(audioUrlFor(state.bookId));
+      player.refreshMeta();
+    }
+  }
+
+  // ---------- 内容加载 ----------
+
   function fetchJSON(url) {
     return fetch(url).then(function (r) {
       if (!r.ok) throw new Error(url + ' ' + r.status);
@@ -44,24 +118,58 @@
     });
   }
 
-  // ---------- 左栏 ----------
+  // ---------- 左栏：书卡（今日大字 + 五档统计行）与篇章行 ----------
 
   function renderBookList() {
+    var today = XGStats.todayStr();
     $('bookList').innerHTML = BOOKS.map(function (b) {
       var book = cache[b.id];
-      var cnt = book ? book.chapters.length + ' 章 · ' + book.flat.length + ' 句' : '';
-      return '<button class="book' + (b.id === state.bookId ? ' on' : '') +
-        '" data-book="' + b.id + '"><span class="bt">' + b.name + '</span>' +
-        '<span class="bc">' + cnt + '</span></button>';
+      var audio = audioState[b.id];
+      var audioTxt = audio && audio.bound ? '已加音频' : '未加音频';
+      var html = '<button class="book' + (b.id === state.bookId ? ' on' : '') +
+        '" data-book="' + b.id + '"><span class="bk-head"><span class="bt">' + b.name +
+        '</span><span class="bk-audio' + (audio && audio.bound ? ' has' : '') + '">' +
+        audioTxt + '</span></span>';
+      if (book) {
+        var cs = stats.bookCardStats(b.id, book.chapters.length, today);
+        html += '<span class="bk-today"><b>' + cs.today + '</b>' +
+          '<span class="bk-unit">遍 · 今日</span></span>' +
+          '<span class="bk-stats">今日 ' + cs.today + ' · 本周 ' + cs.week +
+          ' · 上周 ' + cs.lastWeek + ' · 本月 ' + cs.month + ' · 总计 ' + cs.total +
+          ' 遍</span>' +
+          '<span class="bc">' + book.chapters.length + ' 章 · ' + book.flat.length + ' 句</span>';
+      }
+      return html + '</button>';
     }).join('');
   }
 
   function renderChapList(book) {
+    var today = XGStats.todayStr();
     $('chapHead').textContent = '篇章 · ' + book.title;
     $('chapList').innerHTML = book.chapters.map(function (ch, i) {
-      return '<button class="chap' + (i === state.curChap ? ' on' : '') +
-        '" data-chap="' + i + '">' + XGRender.esc(ch.title) + '</button>';
+      var n = stats.chapterToday(book.bookId, i, today);
+      return '<div class="chap-row">' +
+        '<button class="chap main' + (i === state.curChap ? ' on' : '') +
+        '" data-chap-main="' + i + '">' + XGRender.esc(ch.title) + '</button>' +
+        '<button class="chap-play" data-chap-play="' + i + '" title="从本章播放">▶</button>' +
+        '<button class="chap-chip" data-chap-chip="' + i + '" title="点改今日遍数">今日 ' +
+        n + ' 遍</button></div>';
     }).join('');
+    markPlayingChapter(player ? player.currentChapter() : -1);
+  }
+
+  function markPlayingChapter(idx) {
+    var rows = $('chapList').querySelectorAll('.chap-row');
+    rows.forEach(function (row, i) {
+      row.classList.toggle('playing', i === idx);
+    });
+  }
+
+  /* 遍数变化后重画左栏（书卡统计 + 篇章行今日数） */
+  function refreshCounts() {
+    renderBookList();
+    var book = cache[state.bookId];
+    if (book) renderChapList(book);
   }
 
   // ---------- 阅读页 ----------
@@ -105,10 +213,91 @@
       renderChapList(book);
       renderVerOptions(book);
       renderReader(book);
+      player.setBook(book, audioUrlFor(bookId));
     }).catch(function (e) {
       txtEl.innerHTML = '<div class="loading">载入失败：' + XGRender.esc(e.message) + '</div>';
     });
   }
+
+  // ---------- 播放器 ----------
+
+  var player = XGPlayer.create({
+    audio: $('audioEl'),
+    els: {
+      play: $('plPlay'), back: $('plBack'), fwd: $('plFwd'),
+      seek: $('plSeek'), cur: $('plCur'), dur: $('plDur'),
+      chap: $('plChap'), book: $('plBook'),
+      loop: $('plLoop'), rate: $('plRate'), addAudio: $('plAddAudio')
+    },
+    readerEl: readerEl,
+    onCount: function (bookId, chIdx) {
+      stats.addAuto(bookId, chIdx, XGStats.todayStr(), 1);
+      persistStats();
+      refreshCounts();
+    },
+    onNeedAudio: function () {
+      var btn = $('plAddAudio');
+      btn.classList.add('attn');
+      setTimeout(function () { btn.classList.remove('attn'); }, 1600);
+    },
+    onAddAudio: function (bookId) { requestAudio(bookId); },
+    onChapterChange: function (idx) { markPlayingChapter(idx); }
+  });
+
+  // ---------- 篇章行「今日 X 遍」编辑 ----------
+
+  var editCtx = null; // {bookId, chapterIdx}
+
+  function openEdit(bookId, idx) {
+    var book = cache[bookId];
+    if (!book) return;
+    editCtx = { bookId: bookId, chapterIdx: idx };
+    $('editTitle').textContent = book.chapters[idx].title + ' · 今日遍数';
+    $('editInput').value = stats.chapterToday(bookId, idx, XGStats.todayStr());
+    $('editErr').textContent = '';
+    $('editMask').hidden = false;
+    $('editInput').focus();
+    $('editInput').select();
+  }
+
+  function closeEdit() {
+    editCtx = null;
+    $('editMask').hidden = true;
+  }
+
+  function editStep(delta) {
+    var base = XGStats.parseEditInput($('editInput').value);
+    if (base === null && editCtx) {
+      base = stats.chapterToday(editCtx.bookId, editCtx.chapterIdx, XGStats.todayStr());
+    }
+    $('editInput').value = XGStats.stepped(base || 0, delta);
+    $('editErr').textContent = '';
+  }
+
+  $('editMinus').addEventListener('click', function () { editStep(-1); });
+  $('editPlus').addEventListener('click', function () { editStep(1); });
+  $('editCancel').addEventListener('click', closeEdit);
+  $('editMask').addEventListener('click', function (e) {
+    if (e.target === $('editMask')) closeEdit();
+  });
+  $('editSave').addEventListener('click', function () {
+    if (!editCtx) return;
+    var v = XGStats.parseEditInput($('editInput').value);
+    if (v === null) {
+      $('editErr').textContent = '请输入 0 或正整数';
+      return;
+    }
+    var today = XGStats.todayStr();
+    var delta = v - stats.chapterToday(editCtx.bookId, editCtx.chapterIdx, today);
+    stats.adjustChapterToday(editCtx.bookId, editCtx.chapterIdx, today, delta);
+    persistStats();
+    refreshCounts();
+    closeEdit();
+  });
+  $('editInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') $('editSave').click();
+    if (e.key === 'Escape') closeEdit();
+  });
 
   // ---------- 交互 ----------
 
@@ -118,9 +307,13 @@
   });
 
   $('chapList').addEventListener('click', function (e) {
-    var b = e.target.closest('[data-chap]');
+    var chip = e.target.closest('[data-chap-chip]');
+    if (chip) { openEdit(state.bookId, +chip.dataset.chapChip); return; }
+    var play = e.target.closest('[data-chap-play]');
+    if (play) { player.playChapter(+play.dataset.chapPlay); return; }
+    var b = e.target.closest('[data-chap-main]');
     if (!b) return;
-    var i = +b.dataset.chap;
+    var i = +b.dataset.chapMain;
     state.curChap = i;
     renderChapList(cache[state.bookId]);
     var el = $('ch' + i);
@@ -158,7 +351,8 @@
     readerEl.scrollLeft = 0;
   });
 
-  /* 点句：高亮本句；竖排时在注栏显示它所在注块的注文 */
+  /* 点句：高亮本句；竖排时在注栏显示它所在注块的注文；
+     已加音频时点句跳播到该句（v0.2.0） */
   txtEl.addEventListener('click', function (e) {
     var el = e.target.closest('.s');
     if (!el) return;
@@ -170,12 +364,12 @@
     }
     state.curSent = i;
     el.classList.add('cur');
+    if (player.hasAudio()) player.playSentence(i);
     if (state.vert) {
       var n = XGRender.noteFor(book.flat[i], state.ver[book.bookId]);
       var body = $('notePanelBody');
       var text = null, f = '';
       if (n) {
-        // 注文在段末句那份条目上（e 为段末句拉平下标）
         var endEntry = book.flat[n.e] && book.flat[n.e].nt[n.ver];
         if (endEntry && endEntry.t) { text = endEntry.t; f = XGRender.noteFooter(n); }
       }
@@ -188,5 +382,21 @@
     }
   });
 
-  openBook('daxue');
+  // ---------- 启动 ----------
+
+  if (hasNative) {
+    post({ cmd: 'loadStats' });
+    post({ cmd: 'getAudioState' });
+  } else {
+    try {
+      stats = XGStats.loadStore(localStorage.getItem('xiange.chapter_stats'));
+    } catch (e) {}
+  }
+  renderBookList();
+  // 三本书都先载入（书卡统计行需要各书章数），再打开默认书
+  Promise.all(BOOKS.map(function (b) {
+    return loadBook(b.id).catch(function () { return null; });
+  })).then(function () {
+    openBook('daxue');
+  });
 })();

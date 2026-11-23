@@ -22,7 +22,8 @@ BOOKSTORE_DIR="${BOOKSTORE_DIR:-../../bookstore/repos}"
 assemble_web() {
   local dest="$1"
   mkdir -p "$dest/data"
-  cp Web/index.html Web/app.css Web/app.js Web/bookdata.js Web/render.js "$dest/"
+  cp Web/index.html Web/app.css Web/app.js Web/bookdata.js Web/render.js \
+     Web/stats.js Web/playcore.js Web/player.js "$dest/"
 
   # 《大学》（本 repo assets）
   cp "$ASSETS/content/daxue.json"        "$dest/data/daxue.json"
