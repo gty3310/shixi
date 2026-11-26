@@ -10,13 +10,16 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.PopupWindow;
 import android.widget.Toast;
 
 import java.io.InputStream;
@@ -105,12 +108,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private android.widget.ScrollView readerNoteScroll;
     /** 竖排注栏上次内容键（句号＋版本＋块首），变化才重设文本，避免轮询里反复刷 */
     private String noteBarKey = null;
-    /** v1.7 跟读字数小钮（跟读开时显示，如「15字」）与底部说明行 */
+    /** v1.7 跟读字数小钮（跟读开时显示，如「15字」） */
     private TextView btnRFollowChars;
-    private TextView readerFollowHint;
-    /** v1.8.5 跟读调试读数行（跟读开时显示）与上次推送文案（去重） */
-    private TextView readerFollowDebug;
-    private String lastFollowDebug = null;
+    /** v1.33 跟读说明浮层（点开跟读时浮出 3 秒自动消失，不占版面） */
+    private PopupWindow followHintPopup;
+    private final Runnable followHintDismiss = () -> dismissFollowHintBubble();
     private TextView readerPageInfo;
     private Boolean lastFollowOn = null;
     private Integer lastChunkChars = null;
@@ -217,8 +219,6 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         readerNoteText = findViewById(R.id.readerNoteText);
         readerNoteFooter = findViewById(R.id.readerNoteFooter);
         readerNoteScroll = findViewById(R.id.readerNoteScroll);
-        readerFollowHint = findViewById(R.id.readerFollowHint);
-        readerFollowDebug = findViewById(R.id.readerFollowDebug);
         readerPageInfo = findViewById(R.id.readerPageInfo);
         btnRScript = findViewById(R.id.btnRScript);
         btnRPinyin = findViewById(R.id.btnRPinyin);
@@ -289,8 +289,14 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             }
             lastFollowOn = now;
             refreshFollowButton(now);
-            Toast.makeText(this, now ? "跟读已开启：听一段，停一段等你复诵"
-                    : "跟读已关闭", Toast.LENGTH_SHORT).show();
+            if (now) {
+                // v1.33：开启时把跟读说明以浮层浮出 3 秒（原常驻说明行已删）；
+                // 浮层文案已含原「跟读已开启」短 toast 的信息，不再叠加 toast
+                showFollowHintBubble();
+            } else {
+                dismissFollowHintBubble();
+                Toast.makeText(this, "跟读已关闭", Toast.LENGTH_SHORT).show();
+            }
         });
         btnRFollowChars.setOnClickListener(v -> showChunkCharsDialog());
         btnRRecite.setOnClickListener(v -> toggleRecite());
@@ -420,7 +426,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
                 else getSharedPreferences("follow_prefs", MODE_PRIVATE)
                         .edit().putBoolean("enabled", false).apply();
                 lastFollowOn = false;
-                refreshFollowButton(false); // 连带藏起字数小钮与说明行
+                refreshFollowButton(false); // 连带藏起字数小钮
             }
         }
         btnRFollow.setVisibility(showFollow ? View.VISIBLE : View.GONE);
@@ -838,7 +844,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         return chars <= 0 ? "整句" : chars + "字";
     }
 
-    /** v1.7：字数小钮与说明行只在跟读开启时出现；说明行里的档位字样随当前字数走 */
+    /** v1.7：字数小钮只在跟读开启时出现（v1.33 起底部说明行已删，说明改走浮层） */
     private void refreshFollowExtras(boolean on) {
         int chars = chunkCharsNow();
         lastChunkChars = chars;
@@ -846,13 +852,50 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             btnRFollowChars.setVisibility(on ? View.VISIBLE : View.GONE);
             btnRFollowChars.setText(chunkLabel(chars));
         }
-        if (readerFollowHint != null) {
-            readerFollowHint.setVisibility(on ? View.VISIBLE : View.GONE);
-            if (on) {
-                readerFollowHint.setText("跟读：播一段、停一段（停顿是所播时长的 1.5 倍），"
-                        + "到段末自动停下等你复诵；点『" + chunkLabel(chars)
-                        + "』可改每段字数，短句会自动合并、长句会按标点拆开。");
-            }
+    }
+
+    /** v1.33 跟读说明浮层：用户点开跟读开关时，在播放栏上方浮出这段说明，
+     *  3 秒后自动消失；不占版面、不常驻。文案与旧常驻说明行一致（档位字样随当前字数走） */
+    private void showFollowHintBubble() {
+        dismissFollowHintBubble();
+        if (btnRFollow == null) return;
+        float density = getResources().getDisplayMetrics().density;
+        TextView tv = new TextView(this);
+        tv.setText("跟读：播一段、停一段（停顿是所播时长的 1.5 倍），"
+                + "到段末自动停下等你复诵；点『" + chunkLabel(chunkCharsNow())
+                + "』可改每段字数，短句会自动合并、长句会按标点拆开。");
+        tv.setTextSize(12);
+        tv.setTextColor(0xFFF3ECDC);
+        tv.setLineSpacing(0, 1.3f);
+        int padH = (int) (14 * density), padV = (int) (10 * density);
+        tv.setPadding(padH, padV, padH, padV);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xE63B342A);
+        bg.setCornerRadius(10 * density);
+        tv.setBackground(bg);
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int maxW = screenW - (int) (32 * density);
+        tv.setMaxWidth(maxW);
+        PopupWindow pw = new PopupWindow(tv, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        pw.setOutsideTouchable(true);
+        tv.measure(View.MeasureSpec.makeMeasureSpec(maxW, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int[] loc = new int[2];
+        btnRFollow.getLocationInWindow(loc);
+        int x = Math.max((int) (16 * density), (screenW - tv.getMeasuredWidth()) / 2);
+        int y = Math.max(0, loc[1] - tv.getMeasuredHeight() - (int) (10 * density));
+        pw.showAtLocation(btnRFollow, Gravity.NO_GRAVITY, x, y);
+        followHintPopup = pw;
+        handler.postDelayed(followHintDismiss, 3000);
+    }
+
+    /** 收起跟读说明浮层（3 秒到时、关跟读、页面销毁时调用） */
+    private void dismissFollowHintBubble() {
+        handler.removeCallbacks(followHintDismiss);
+        if (followHintPopup != null) {
+            followHintPopup.dismiss();
+            followHintPopup = null;
         }
     }
 
@@ -1030,21 +1073,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             web.evaluateJavascript("setFollowMode(" + fOn + ")", null);
             if (fOn) curClause = -1;
         }
-        // v1.8.5 跟读调试读数：跟读开且服务在场时附一行实测读数（过冲/落点），
-        // 随本轮询（150ms）刷新、文案变化才 setText；关时整行隐藏
-        if (readerFollowDebug != null) {
-            if (fOn && svc != null) {
-                String dbg = svc.followDebugText();
-                readerFollowDebug.setVisibility(View.VISIBLE);
-                if (!dbg.equals(lastFollowDebug)) {
-                    lastFollowDebug = dbg;
-                    readerFollowDebug.setText(dbg);
-                }
-            } else {
-                readerFollowDebug.setVisibility(View.GONE);
-                lastFollowDebug = null;
-            }
-        }
+        // v1.33：跟读调试读数行已删（用户亲点）——过冲/落点采样仍在 PlayerService
+        // 内旁路记录，只是不再上屏
         // gap 阶段标记：当前句保持高亮，只换一层底色/线型提示「轮到你复诵」
         boolean gapOn = mine && svc.followEnabled
                 && svc.followPhase == PlayerService.FOLLOW_GAP;
@@ -1677,6 +1707,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
 
     @Override
     protected void onDestroy() {
+        dismissFollowHintBubble();
         // 识读会话持有麦克风与识别器，页面销毁必须停干净
         if (reciteSession != null) {
             reciteOn = false;

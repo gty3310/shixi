@@ -596,29 +596,8 @@ public class PlayerService extends Service {
         foDbgSeekTarget = -1;
     }
 
-    /** v1.8.5 调试读数一行文案（界面轮询时取用；跟读关时界面不显示这一行）。
-     *  落点读数含最多一拍轮询（50ms×倍速）的播放前进量，为上限估计 */
-    public String followDebugText() {
-        if (foDbgOverCount <= 0 && foDbgSeekCount <= 0) {
-            return "调试 暂无数据，跟读一段后显示";
-        }
-        StringBuilder sb = new StringBuilder("调试 ");
-        if (foDbgOverCount > 0) {
-            sb.append("过冲 最近 ").append(foDbgOverLast)
-                    .append("ms · 平均 ").append(foDbgOverSum / foDbgOverCount)
-                    .append(" · 最大 ").append(foDbgOverMax)
-                    .append("（").append(foDbgOverCount).append("段）");
-        } else {
-            sb.append("过冲 暂无");
-        }
-        sb.append("｜落点 ");
-        if (foDbgSeekCount > 0) {
-            sb.append(foDbgSeekLast).append("ms");
-        } else {
-            sb.append("暂无");
-        }
-        return sb.toString();
-    }
+    // v1.33：调试读数行已从界面删除（用户亲点），followDebugText 显示文案随之移除；
+    // foDbg* 过冲/落点采样字段与采样点保留（纯旁路统计，日后排查仍可用）
 
     /** 阅读页高亮联动用：当前跟读段的代表句在全书拉平顺序中的下标，无则 -1。
      *  gap 阶段报段末句（与旧版 gap 高亮语义一致：高亮停在刚播完的那句） */
