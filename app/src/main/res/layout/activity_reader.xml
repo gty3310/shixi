@@ -414,6 +414,19 @@
                 android:textColor="#DDD6CB"
                 android:textSize="13sp" />
 
+            <!-- v1.31.0 念注听法开关：开＝听「正文＋注释」，呈现口径同注释钮 -->
+            <TextView
+                android:id="@+id/btnRListenNotes"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingLeft="12dp"
+                android:paddingTop="6dp"
+                android:paddingRight="12dp"
+                android:paddingBottom="6dp"
+                android:text="念注 关"
+                android:textColor="#DDD6CB"
+                android:textSize="13sp" />
+
             <TextView
                 android:id="@+id/btnRFont"
                 android:layout_width="wrap_content"

@@ -171,6 +171,8 @@ public class SettingsActivity extends Activity {
                                         : idx == 3 ? "daodu" : "zhijie").apply());
         addShowRow(root, "注释", "showNotesBtn");
 
+        addShowRow(root, "念注", "showListenNotesBtn");
+
         addDivider(root);
 
         // ---------- 卡片阅读数组（v1.12.0 单选 → v1.14.1 多选） ----------

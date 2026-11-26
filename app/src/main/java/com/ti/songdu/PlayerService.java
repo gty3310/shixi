@@ -255,6 +255,8 @@ public class PlayerService extends Service {
                 isCpChapter = localIdx > cpChapterLocal;
             }
             if (isCpChapter) {
+                // v1.31.0：章界处正赶上要念的注——先念注，章界动作押后（别把注掐断）
+                if (deferChapterForNote(localIdx, true, pos)) return;
                 if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
                     wrapToChapterStart(localIdx);
                 } else {
@@ -263,6 +265,7 @@ public class PlayerService extends Service {
                 return;
             }
             if (!chapterPlayback && act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                if (deferChapterForNote(localIdx, false, pos)) return;
                 wrapToChapterStart(localIdx);
                 return;
             }
@@ -278,6 +281,7 @@ public class PlayerService extends Service {
         }
         if (current != null) current.positionMs = start;
         chapterTracker.resetToChapter(localIdx, start);
+        resyncNoteCues(start); // v1.31.0：回绕后念注指针按新落点重定（本章注重新待发）
         updateNotification();
         notifyState();
     }
@@ -402,6 +406,78 @@ public class PlayerService extends Service {
                 handler.postDelayed(this, 50);
             } else {
                 followLoopPosted = false;
+            }
+        }
+    };
+
+    // ---------- v1.31.0 念注（听法「正文＋注释」） ----------
+    // 框架与引擎解耦：触发表由纯逻辑 NoteCuePlan 按「选定版本优先、缺则回退」
+    // （与阅读页 displayNote 同口径）从内容包现算，指针由 NoteCueTracker 管；
+    // 注音频经 NoteTtsEngine 接口取得——引擎已拍板为云端预生成音频包
+    // （PackNoteTtsEngine＋TtsPackStore，本地 TTS 取消）；包未下载时框架
+    // 停发触发、正文播放与现行版分毫不差。状态机仿跟读：
+    // watcher 50ms 一拍，播到带注句（注块末句）句末 → 暂停正文 → 短停顿
+    // 区分 → 念注 → 按 noteAfter 续行。跟读开 / 识读会话中不介入。
+    /** 听法开关：true＝正文＋注释（持久化 reader_prefs/listenNotes，默认关＝只听正文） */
+    public boolean noteCuesEnabled = false;
+    private static final String KEY_LISTEN_NOTES = "listenNotes";
+    private static final int NOTE_IDLE = 0;
+    /** 已暂停正文、等音频就绪且前导停顿满 */
+    private static final int NOTE_LEADIN = 1;
+    /** 正在念注 */
+    private static final int NOTE_SPEAKING = 2;
+    private int noteState = NOTE_IDLE;
+    /** 念完这条注后正文的去向：直接续播 / 先办押后的章界动作 / 先办押后的整轨完成 */
+    private static final int NOTE_AFTER_RESUME = 0;
+    private static final int NOTE_AFTER_CHAPTER = 1;
+    private static final int NOTE_AFTER_COMPLETION = 2;
+    private int noteAfter = NOTE_AFTER_RESUME;
+    /** 正在处理（前导/念诵中）的 cue 下标与其触发句 flat；无时 -1 */
+    private int noteCueIdx = -1;
+    private int noteCueFlat = -1;
+    /** 触发瞬间正文是否在播（注后是否续播的依据） */
+    private boolean noteWasPlaying = false;
+    /** 本条注的音频是否就绪（缓存命中或引擎回调成功）/ 是否已失败（跳过本条） */
+    private boolean noteAudioReady = false;
+    private boolean noteAudioFailed = false;
+    private java.io.File noteAudioFile = null;
+    /** 前导停顿的起止（uptimeMillis）：正文与注之间留一拍静默区分；音频迟迟
+     *  不就绪时以前导上限为界放弃本条，绝不把正文无限期挂住 */
+    private long noteLeadInEndsAt = 0;
+    private long noteLeadInStartedAt = 0;
+    private static final long NOTE_LEAD_IN_MS = 600;
+    private static final long NOTE_LEAD_IN_MAX_MS = 20_000;
+    /** 预取窗口：下一条注在正文 90 秒内将触发时提前向引擎备音频，藏合成时延 */
+    private static final long NOTE_PREFETCH_AHEAD_MS = 90_000;
+    /** 念注专用播放器（与正文 mp 分开，互不抢状态） */
+    private MediaPlayer noteMp = null;
+    /** 触发表与绑定键（曲目 id＋选定注释版本＋当前声音；切歌/切版本/切声失效重建） */
+    private java.util.List<NoteCuePlan.Cue> ncCues = null;
+    private final NoteCueTracker ncTracker = new NoteCueTracker();
+    private String ncTrackId = null;
+    private String ncVerKey = null;
+    private String ncVoiceKey = null;
+    private String ncBookId = null;
+    /** 逐 cue 的音频就绪/备制中标记（与 ncCues 同建同废） */
+    private boolean[] ncReady = null;
+    private boolean[] ncPreparing = null;
+    /** 当前绑定（书＋版本）的音频包未下载：引擎回报一次后置真，停发后续
+     *  触发（不逐条重试、不连串停顿）；触发表重建/重新开启听法时清零 */
+    private boolean ncPackMissing = false;
+    /** 念注引擎（云端预生成音频包实现；接口为 null 时框架整体不触发） */
+    private final NoteTtsEngine noteEngine = NoteTtsEngineFactory.create();
+    /** 章界动作被念注押后的落点（章下标＋是否章级播放的目标章）；-1＝无押后 */
+    private int deferredChapterLocalIdx = -1;
+    private boolean deferredChapterWasCp = false;
+    private boolean noteLoopPosted = false;
+    private final Runnable noteTick = new Runnable() {
+        @Override
+        public void run() {
+            noteStep();
+            if (noteCuesEnabled) {
+                handler.postDelayed(this, 50);
+            } else {
+                noteLoopPosted = false;
             }
         }
     };
@@ -955,6 +1031,424 @@ public class PlayerService extends Service {
         notifyState();
     }
 
+    // ---------- v1.31.0 念注状态机（引擎无关的衔接框架） ----------
+
+    private void startNoteLoop() {
+        if (noteLoopPosted) return;
+        noteLoopPosted = true;
+        handler.post(noteTick);
+    }
+
+    private void stopNoteLoop() {
+        handler.removeCallbacks(noteTick);
+        noteLoopPosted = false;
+    }
+
+    /** 听法开关：写持久化（reader_prefs/listenNotes，与阅读页同一个键）；
+     *  开时只置态（播起来后 watcher 按当前位置接上），关时立即中止正在念的注 */
+    public void setNoteCuesEnabled(boolean on) {
+        noteCuesEnabled = on;
+        getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .edit().putBoolean(KEY_LISTEN_NOTES, on).apply();
+        if (on) {
+            ncPackMissing = false; // 重新开启时给包一次重新命中的机会（下载引导在阅读页）
+            startNoteLoop();
+        } else {
+            cancelNoteCue();
+            stopNoteLoop();
+        }
+    }
+
+    /** 引擎是否已接入且就绪（未就绪时框架不触发；阅读页据此给开启提示） */
+    public boolean noteEngineReady() {
+        if (noteEngine == null) return false;
+        try {
+            return noteEngine.isReady(this);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 正在前导/念诵的注的触发句 flat（阅读页视觉标出用）；无返回 -1 */
+    public int noteSpeakingFlat() {
+        return noteState != NOTE_IDLE ? noteCueFlat : -1;
+    }
+
+    /** 注释版本被改动后由阅读页调用：触发表按新版本重建（下次 ensure 时生效） */
+    public void invalidateNoteCues() {
+        ncTrackId = null;
+        ncCues = null;
+    }
+
+    private static NoteCuePlan.RefIn refIn(ContentRepo.NoteRef r) {
+        return r == null ? null : new NoteCuePlan.RefIn(r.text, r.startFlat, r.endFlat);
+    }
+
+    /**
+     * 触发表重建（与跟读时间轴同款绑定：曲目 id＋选定注释版本；切歌/切版本
+     * 后失效重建）。数据走 bookForVoice/bookForTrack（与章监测同一份 Book：
+     * 当前声音的时间轴），解析与触发点计算全在纯逻辑 NoteCuePlan，本方法
+     * 只做数据适配。重建后按当前播放位置 resync 指针：身后 cue 视为已消费
+     * （中途开启听法/切版本不补念旧注），身前 cue 待发。
+     */
+    private boolean ensureNoteCues() {
+        if (current == null) return false;
+        String ver = getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .getString("notesVer", "zhijie");
+        if (ncCues != null && current.id.equals(ncTrackId) && ver.equals(ncVerKey)
+                && activeVoice.equals(ncVoiceKey)) {
+            return !ncCues.isEmpty();
+        }
+        ncTrackId = current.id;
+        ncVerKey = ver;
+        ncVoiceKey = activeVoice;
+        ncCues = null;
+        ncBookId = null;
+        ncReady = null;
+        ncPreparing = null;
+        ncPackMissing = false;
+        ncTracker.setCues(new long[0]);
+        try {
+            ContentRepo.Book b = ContentRepo.bookForVoice(this, current, activeVoice);
+            if (b == null) b = ContentRepo.bookForTrack(this, current);
+            if (b == null || b.flat.isEmpty()) return false;
+            String bid = PlanBooks.bookIdOfTrackFull(current);
+            if (bid == null) bid = b.bookId;
+            if (bid == null) return false;
+            double scale = ContentRepo.scaleFor(current, b);
+            java.util.List<NoteCuePlan.SentIn> sins = new java.util.ArrayList<>();
+            for (ContentRepo.Sentence s : b.flat) {
+                NoteCuePlan.SentIn in = new NoteCuePlan.SentIn();
+                in.startMs = s.startMs;
+                in.endMs = s.endMs;
+                in.noAudio = s.noAudio;
+                in.id = s.id;
+                in.zj = refIn(s.noteZj);
+                in.jz = refIn(s.noteJz);
+                in.gf = refIn(s.noteGf);
+                in.dd = refIn(s.noteDd);
+                sins.add(in);
+            }
+            java.util.List<NoteCuePlan.Cue> cues = NoteCuePlan.build(sins, ver, scale);
+            if (cues.isEmpty()) return false;
+            ncCues = cues;
+            ncBookId = bid;
+            ncReady = new boolean[cues.size()];
+            ncPreparing = new boolean[cues.size()];
+            long[] fires = new long[cues.size()];
+            for (int i = 0; i < cues.size(); i++) fires[i] = cues.get(i).fireMs;
+            ncTracker.setCues(fires);
+            if (prepared) ncTracker.resync(currentPosition());
+            return true;
+        } catch (Exception ignored) {
+            ncCues = null;
+            return false;
+        }
+    }
+
+    /** seek/回绕后按落点重定念注指针（身后不补念、身前重新待发） */
+    private void resyncNoteCues(long pos) {
+        if (ncCues != null) ncTracker.resync(pos);
+    }
+
+    /** 念注触发提前量：与跟读停止点同公式（25ms×倍速＋25ms 余量），按当前倍速现算 */
+    private long noteEarlyMs() {
+        return Math.round(25.0 * (double) store.speed) + 25;
+    }
+
+    /** 念注 watcher 一拍（50ms）：前导推进、触发判定、下一条预取。
+     *  跟读开 / 识读会话中不介入；引擎未就绪整体不触发（正文零停顿）。 */
+    private void noteStep() {
+        if (!noteCuesEnabled) return;
+        if (noteState == NOTE_LEADIN) {
+            if (noteAudioFailed
+                    || SystemClock.uptimeMillis() - noteLeadInStartedAt > NOTE_LEAD_IN_MAX_MS) {
+                concludeNote(); // 音频失败/超时：跳过本条，按原去向续行，不挂住正文
+                return;
+            }
+            if (noteAudioReady && SystemClock.uptimeMillis() >= noteLeadInEndsAt) {
+                beginNotePlayback();
+            }
+            return;
+        }
+        if (noteState != NOTE_IDLE) return; // SPEAKING 由 noteMp 自己的完成回调收尾
+        if (current == null || mp == null || !playing || !prepared || preparing || restarting) return;
+        if (followEnabled || chapterSuspended) return;
+        if (!noteEngineReady()) return;
+        if (!ensureNoteCues()) return;
+        if (ncPackMissing) return; // 本书＋本版本的包未下：整体不触发（下载引导在阅读页）
+        long pos = currentPosition();
+        int due = ncTracker.dueIndex(pos, noteEarlyMs());
+        if (due >= 0) {
+            startNoteCue(due, NOTE_AFTER_RESUME);
+            return;
+        }
+        maybePrefetchNote(pos);
+    }
+
+    /** 下一条注将近（正文 90 秒内触发）时提前查包：命中先标就绪（触发时
+     *  零等待），包未下载则提前置 ncPackMissing、连第一条的空停顿也免了 */
+    private void maybePrefetchNote(long pos) {
+        int ni = ncTracker.nextIndex();
+        if (ni < 0 || ncCues == null || ni >= ncCues.size()) return;
+        if (ncReady[ni] || ncPreparing[ni]) return;
+        if (ncTracker.nextFireMs() - pos > NOTE_PREFETCH_AHEAD_MS) return;
+        prepareNoteAudio(ni);
+    }
+
+    /**
+     * 为第 idx 条 cue 备音频：经引擎按「书＋实际版本＋注块键」查本地音频包
+     * （纯本地查包、瞬时返回）。回调一律回主线程落标记；该 cue 正在前导
+     * 等待时顺带点亮 noteAudioReady。包未下载（ERR_NOT_DOWNLOADED）置
+     * ncPackMissing 停发后续触发；包在但本条不在包内只跳过本条。
+     */
+    private void prepareNoteAudio(final int idx) {
+        if (ncCues == null || idx < 0 || idx >= ncCues.size() || ncBookId == null) return;
+        if (noteEngine == null || ncPreparing[idx]) return;
+        final NoteCuePlan.Cue cue = ncCues.get(idx);
+        ncPreparing[idx] = true;
+        try {
+            noteEngine.prepare(this, ncBookId, cue.ver, cue.keySentId, new NoteTtsEngine.Callback() {
+                @Override
+                public void onReady(final java.io.File audioFile) {
+                    handler.post(() -> {
+                        if (ncPreparing == null || idx >= ncPreparing.length) return;
+                        ncPreparing[idx] = false;
+                        if (audioFile == null || !audioFile.exists()) {
+                            if (noteState == NOTE_LEADIN && noteCueIdx == idx) noteAudioFailed = true;
+                            return;
+                        }
+                        if (ncReady != null && idx < ncReady.length) ncReady[idx] = true;
+                        if (noteState == NOTE_LEADIN && noteCueIdx == idx) {
+                            noteAudioFile = audioFile;
+                            noteAudioReady = true;
+                        }
+                    });
+                }
+
+                @Override
+                public void onError(final String message) {
+                    handler.post(() -> {
+                        if (ncPreparing != null && idx < ncPreparing.length) ncPreparing[idx] = false;
+                        if (TtsPackStore.ERR_NOT_DOWNLOADED.equals(message)) {
+                            ncPackMissing = true; // 停发后续触发，免连串空停顿
+                        }
+                        if (noteState == NOTE_LEADIN && noteCueIdx == idx) noteAudioFailed = true;
+                    });
+                }
+            });
+        } catch (Exception e) {
+            ncPreparing[idx] = false;
+            if (noteState == NOTE_LEADIN && noteCueIdx == idx) noteAudioFailed = true;
+        }
+    }
+
+    /**
+     * 触发第 idx 条 cue：消费指针 → 暂停正文 → 进前导（等停顿满＋音频就绪）。
+     * after 记念完的去向。启动失败返回 false，调用方按原路继续——念注坏掉
+     * 绝不许拖垮正文流程。
+     */
+    private boolean startNoteCue(int idx, int after) {
+        if (ncCues == null || idx < 0 || idx >= ncCues.size()) return false;
+        NoteCuePlan.Cue cue = ncCues.get(idx);
+        if (cue.text == null || cue.text.isEmpty()) return false;
+        ncTracker.consumeUpTo(idx);
+        noteState = NOTE_LEADIN;
+        noteCueIdx = idx;
+        noteCueFlat = cue.flat;
+        noteAfter = after;
+        noteWasPlaying = playing;
+        noteAudioReady = false;
+        noteAudioFailed = false;
+        noteAudioFile = null;
+        pausePlayer(); // 正文暂停（playing=false、位置落盘、状态通知，与用户暂停同路）
+        noteLeadInStartedAt = SystemClock.uptimeMillis();
+        noteLeadInEndsAt = noteLeadInStartedAt + NOTE_LEAD_IN_MS;
+        prepareNoteAudio(idx); // 缓存命中即刻就绪；未命中等引擎回调（前导随之延长）
+        notifyState();
+        return true;
+    }
+
+    /** 前导满且音频就绪：念注专用播放器开念。倍速以 PlaybackParams 施加
+     *  （引擎产自然语速音频，与正文录音同口径；缓存因此与倍速无关） */
+    private void beginNotePlayback() {
+        if (noteAudioFile == null) {
+            concludeNote();
+            return;
+        }
+        try {
+            releaseNotePlayer();
+            noteMp = new MediaPlayer();
+            noteMp.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build());
+            noteMp.setDataSource(noteAudioFile.getAbsolutePath());
+            noteMp.setOnPreparedListener(p -> {
+                try {
+                    p.setPlaybackParams(p.getPlaybackParams().setSpeed(store.speed));
+                } catch (Exception ignored) {
+                }
+                noteState = NOTE_SPEAKING;
+                try {
+                    p.start();
+                } catch (Exception ignored) {
+                    handler.post(this::concludeNote);
+                }
+                notifyState();
+            });
+            noteMp.setOnCompletionListener(p -> handler.post(this::concludeNote));
+            noteMp.setOnErrorListener((p, what, extra) -> {
+                handler.post(this::concludeNote);
+                return true;
+            });
+            noteMp.prepareAsync();
+        } catch (Exception e) {
+            concludeNote();
+        }
+    }
+
+    private void releaseNotePlayer() {
+        if (noteMp != null) {
+            try {
+                noteMp.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                noteMp.release();
+            } catch (Exception ignored) {
+            }
+            noteMp = null;
+        }
+    }
+
+    /** 念注后把正文接上：与 resume() 的起播原语同款（取焦点＋重应用倍速＋start），
+     *  不走 resume() 本身——那里有跟读 gap 与「念注中跳过」的分支，会绕回来 */
+    private void resumeMainAfterNote() {
+        if (mp != null && prepared && current != null) {
+            requestFocus();
+            applySpeed();
+            try {
+                mp.start();
+            } catch (Exception ignored) {
+            }
+            playing = true;
+        }
+    }
+
+    /**
+     * 一条注处理完毕（念完 / 被跳过 / 音频失败）：清念注态，按触发时记下的
+     * 去向续行——押后的章界动作先办、押后的整轨完成其次、否则续播正文。
+     * 用户主动暂停的中止不走这里（走 cancelNoteCue，那是「就此停住」语义）。
+     */
+    private void concludeNote() {
+        if (noteState == NOTE_IDLE) return;
+        int after = noteAfter;
+        boolean wasPlaying = noteWasPlaying;
+        releaseNotePlayer();
+        noteState = NOTE_IDLE;
+        noteCueIdx = -1;
+        noteCueFlat = -1;
+        noteAudioReady = false;
+        noteAudioFailed = false;
+        noteAudioFile = null;
+        if (after == NOTE_AFTER_CHAPTER && deferredChapterLocalIdx >= 0) {
+            int idx = deferredChapterLocalIdx;
+            boolean wasCp = deferredChapterWasCp;
+            deferredChapterLocalIdx = -1;
+            CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
+                    loopEnabled, loopScopeChapter, chapterPlayback);
+            if (wasCp) {
+                if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                    wrapToChapterStart(idx);
+                    resumeMainAfterNote();
+                } else {
+                    stopAtChapterEnd();
+                }
+            } else if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                wrapToChapterStart(idx);
+                resumeMainAfterNote();
+            } else if (wasPlaying) {
+                resumeMainAfterNote();
+            }
+            updateNotification();
+            notifyState();
+            return;
+        }
+        if (after == NOTE_AFTER_COMPLETION) {
+            handleTrackCompletion();
+            return;
+        }
+        if (wasPlaying) resumeMainAfterNote();
+        updateNotification();
+        notifyState();
+    }
+
+    /**
+     * 中止正在处理的一条注（用户暂停、切歌、停止、关听法开关）：停念注播放
+     * 器、清状态与押后动作；正文的播停态不动——用户暂停＝就此停住，切歌/
+     * 停止由调用方自己的流程接管正文。
+     */
+    private void cancelNoteCue() {
+        releaseNotePlayer();
+        noteState = NOTE_IDLE;
+        noteCueIdx = -1;
+        noteCueFlat = -1;
+        noteAudioReady = false;
+        noteAudioFailed = false;
+        noteAudioFile = null;
+        deferredChapterLocalIdx = -1;
+        notifyState();
+    }
+
+    /**
+     * 章界动作（回绕/停章）执行前先问念注：下一条未发 cue 是否已到点。
+     * 到点则押后章界、先念注，返回 true（调用方直接 return）；注念完由
+     * concludeNote 按押后记录把章界动作办掉。计数本身已在调用方完成
+     * （遍数口径不变，押后的只是回绕/停的动作）。
+     */
+    private boolean deferChapterForNote(int localIdx, boolean wasCp, long pos) {
+        if (!noteCuesEnabled || noteState != NOTE_IDLE) return false;
+        if (followEnabled || chapterSuspended) return false;
+        if (!noteEngineReady()) return false;
+        if (!ensureNoteCues()) return false;
+        if (ncPackMissing) return false;
+        int due = ncTracker.dueIndex(pos, noteEarlyMs());
+        if (due < 0) return false;
+        deferredChapterLocalIdx = localIdx;
+        deferredChapterWasCp = wasCp;
+        if (!startNoteCue(due, NOTE_AFTER_CHAPTER)) {
+            deferredChapterLocalIdx = -1;
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 整轨自然播完时先问念注：末句（或末段无录音句）的注还没念则先念，
+     * 整轨完成处理（计数与去向）押后到注后（concludeNote 续行
+     * handleTrackCompletion）。接管成功返回 true。
+     */
+    private boolean tryNoteCueAtTrackEnd() {
+        if (!noteCuesEnabled || noteState != NOTE_IDLE) return false;
+        if (followEnabled || chapterSuspended) return false;
+        if (!noteEngineReady()) return false;
+        if (!ensureNoteCues()) return false;
+        if (ncPackMissing) return false;
+        long dur = effDurationMs();
+        // 只认贴在轨尾的最后一条未发 cue：触发表若是中途才建好（引擎刚
+        // 就绪），前面的 cue 多半已错过、不补念，只捞轨尾这条
+        int ni = -1;
+        for (int i = ncCues.size() - 1; i >= 0; i--) {
+            if (ncCues.get(i).fireMs <= (dur > 0 ? dur + 250 : Long.MAX_VALUE)) {
+                ni = i;
+                break;
+            }
+        }
+        if (ni < 0 || ni < ncTracker.nextIndex()) return false;
+        return startNoteCue(ni, NOTE_AFTER_COMPLETION);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -972,6 +1466,10 @@ public class PlayerService extends Service {
                 .getBoolean(KEY_LOOP_SINGLE, true);
         loopScopeChapter = "chapter".equals(getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
                 .getString(KEY_LOOP_SCOPE, "book"));
+        // v1.31.0：恢复念注听法开关（只恢复开关，冷启动不自动开播）
+        noteCuesEnabled = getSharedPreferences(LOOP_PREFS, MODE_PRIVATE)
+                .getBoolean(KEY_LISTEN_NOTES, false);
+        if (noteCuesEnabled) startNoteLoop();
         if (followEnabled) startFollowLoop();
         startChapterLoop();
         createChannel();
@@ -1238,82 +1736,9 @@ public class PlayerService extends Service {
                 finishFollowPass();
                 return;
             }
-            // v1.21.0：整轨自然播完先补章账（末章在 onCompletion 前未被位置采样越界时兜底；
-            // 跟读路径已在上方return、识读不经播放器，故不会误入此账）
-            if (!chapterSuspended && chEnds.length > 0 && chapterBookId != null
-                    && current != null && current.id.equals(chTrackId)) {
-                int flushed = chapterTracker.flushAtTrackEnd();
-                if (flushed >= 0) countChapter(flushed);
-            }
-            // v1.21.0：章级播放的整轨即一章（论语篇轨）：计数已在上方完成，
-            // 去向按章界口径——单章范围+循环开回绕、整书范围停在章尾，不接整本
-            if (chapterPlayback) {
-                CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
-                        loopEnabled, loopScopeChapter, true);
-                if (current != null) {
-                    store.increment(current, LocalDate.now());
-                    current.positionMs = 0;
-                    store.saveTracks();
-                    if (listener != null) listener.onCountChanged();
-                }
-                if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
-                    chapterPlayback = true; // replayFromStart 内部 playTrack 会按标记保住章态
-                    cpSetupArmed = true;
-                    replayFromStart();
-                } else {
-                    playing = false;
-                    chapterPlayback = false;
-                }
-                updateNotification();
-                notifyState();
-                return;
-            }
-            // 一遍完整播完：先计数落盘、位置清零，再走全量重建路径重播（单曲循环）。
-            // 不再用 v1.0 的 seekTo(0)+start()：PlaybackCompleted 状态下异步 seek 与
-            // start 竞速，在真机上会出现第二遍无声（本次 bug）。
-            if (current != null) {
-                store.increment(current, LocalDate.now());
-                current.positionMs = 0;
-                store.saveTracks();
-                if (listener != null) listener.onCountChanged();
-            }
-            // v1.20.7：播完去向统一走 CompletionPolicy（与跟读 finishFollowPass
-            // 同一判定）：循环开→计数后从头重播；循环关→自动接可接的下一本
-            // （v1.14.1 口径，接不上才停）。计数已在上方完成，不与去向互相牺牲。
-            replayRetryUsed = false;
-            if (loopEnabled) {
-                // v1.26.0：循环开走 loopTarget 整本口径（单章范围回本曲、整书范围
-                // 接本书下一曲、书末回书首、单曲目书回本曲）；计数已在上方完成
-                Track nextInBook = nextTrackInBook();
-                switch (CompletionPolicy.loopTarget(loopScopeChapter, nextInBook != null, currentBookMultiTrack())) {
-                    case NEXT_IN_BOOK:
-                        playTrack(nextInBook);
-                        break;
-                    case FIRST_OF_BOOK: {
-                        Track first = firstTrackOfBook();
-                        if (first != null) playTrack(first);
-                        else replayFromStart();
-                        break;
-                    }
-                    default: // RESTART_SELF
-                        replayFromStart();
-                        break;
-                }
-            } else {
-                switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
-                    case ADVANCE:
-                        advanceToNextTrack();
-                        break;
-                    case STOP:
-                        playing = false;
-                        break;
-                    default: // RESTART
-                        replayFromStart();
-                        break;
-                }
-            }
-            updateNotification();
-            notifyState();
+            // v1.31.0：末句的注先念，整轨完成处理押后（注后由 concludeNote 续行 handleTrackCompletion）
+            if (tryNoteCueAtTrackEnd()) return;
+            handleTrackCompletion();
         });
         mp.setOnErrorListener((p, what, extra) -> {
             prepared = false;
@@ -1324,6 +1749,86 @@ public class PlayerService extends Service {
             notifyState();
             return true;
         });
+    }
+
+    /** 整轨完成处理本体（v1.31.0 从 onCompletion 监听器抽出：念注押后时由 concludeNote 续行，行为与原监听器内联版一致） */
+    private void handleTrackCompletion() {
+        // v1.21.0：整轨自然播完先补章账（末章在 onCompletion 前未被位置采样越界时兜底；
+        // 跟读路径已在上方return、识读不经播放器，故不会误入此账）
+        if (!chapterSuspended && chEnds.length > 0 && chapterBookId != null
+                && current != null && current.id.equals(chTrackId)) {
+            int flushed = chapterTracker.flushAtTrackEnd();
+            if (flushed >= 0) countChapter(flushed);
+        }
+        // v1.21.0：章级播放的整轨即一章（论语篇轨）：计数已在上方完成，
+        // 去向按章界口径——单章范围+循环开回绕、整书范围停在章尾，不接整本
+        if (chapterPlayback) {
+            CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
+                    loopEnabled, loopScopeChapter, true);
+            if (current != null) {
+                store.increment(current, LocalDate.now());
+                current.positionMs = 0;
+                store.saveTracks();
+                if (listener != null) listener.onCountChanged();
+            }
+            if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+                chapterPlayback = true; // replayFromStart 内部 playTrack 会按标记保住章态
+                cpSetupArmed = true;
+                replayFromStart();
+            } else {
+                playing = false;
+                chapterPlayback = false;
+            }
+            updateNotification();
+            notifyState();
+            return;
+        }
+        // 一遍完整播完：先计数落盘、位置清零，再走全量重建路径重播（单曲循环）。
+        // 不再用 v1.0 的 seekTo(0)+start()：PlaybackCompleted 状态下异步 seek 与
+        // start 竞速，在真机上会出现第二遍无声（本次 bug）。
+        if (current != null) {
+            store.increment(current, LocalDate.now());
+            current.positionMs = 0;
+            store.saveTracks();
+            if (listener != null) listener.onCountChanged();
+        }
+        // v1.20.7：播完去向统一走 CompletionPolicy（与跟读 finishFollowPass
+        // 同一判定）：循环开→计数后从头重播；循环关→自动接可接的下一本
+        // （v1.14.1 口径，接不上才停）。计数已在上方完成，不与去向互相牺牲。
+        replayRetryUsed = false;
+        if (loopEnabled) {
+            // v1.26.0：循环开走 loopTarget 整本口径（单章范围回本曲、整书范围
+            // 接本书下一曲、书末回书首、单曲目书回本曲）；计数已在上方完成
+            Track nextInBook = nextTrackInBook();
+            switch (CompletionPolicy.loopTarget(loopScopeChapter, nextInBook != null, currentBookMultiTrack())) {
+                case NEXT_IN_BOOK:
+                    playTrack(nextInBook);
+                    break;
+                case FIRST_OF_BOOK: {
+                    Track first = firstTrackOfBook();
+                    if (first != null) playTrack(first);
+                    else replayFromStart();
+                    break;
+                }
+                default: // RESTART_SELF
+                    replayFromStart();
+                    break;
+            }
+        } else {
+            switch (CompletionPolicy.decide(loopEnabled, nextPlayableTrack() != null)) {
+                case ADVANCE:
+                    advanceToNextTrack();
+                    break;
+                case STOP:
+                    playing = false;
+                    break;
+                default: // RESTART
+                    replayFromStart();
+                    break;
+            }
+        }
+        updateNotification();
+        notifyState();
     }
 
     /** 按曲目来源类型设置数据源：file（预置音频）走内部存储绝对路径，content 走 content:// URI；
@@ -1407,6 +1912,10 @@ public class PlayerService extends Service {
         followIndex = -1;
         followGapPaused = false;
         followFinishGuard = false;
+        // v1.31.0：念注触发表同理失效（新时间轴重建）＋中止正在念的注
+        cancelNoteCue();
+        ncTrackId = null;
+        ncCues = null;
         pendingSeekMs = newPos;
         pendingSeekTrackId = t.id;
         holdAfterPrepare = !wasPlaying;
@@ -1504,6 +2013,10 @@ public class PlayerService extends Service {
         holdAfterPrepare = false;
         // v1.4.3：切歌复位跟读（新曲有原文则播起来后自动接上，无原文自动关）
         resetFollowForNewTrack();
+        // v1.31.0：切歌中止正在念的注、作废旧曲触发表（新曲装载后 watcher 按需重建）
+        cancelNoteCue();
+        ncTrackId = null;
+        ncCues = null;
         try {
             setDataSourceFor(mp, t);
             mp.prepareAsync();
@@ -1550,6 +2063,14 @@ public class PlayerService extends Service {
     }
 
     public void pause() {
+        if (noteState != NOTE_IDLE) {
+            // v1.31.0：念注中点暂停＝中止本条注、就此停住（押后的章界/整轨完成
+            // 一并作废，用户接管；正文播放器本就停着，不再动它）
+            cancelNoteCue();
+            updateNotification();
+            notifyState();
+            return;
+        }
         if (followPhase == FOLLOW_GAP) {
             // v1.4.3：gap 中点暂停＝真暂停，取消倒计时（播放器本就停着），
             // 停在 gap 等用户点播放直接进下一句
@@ -1577,6 +2098,21 @@ public class PlayerService extends Service {
 
     public void resume() {
         if (current == null) return;
+        if (noteState == NOTE_SPEAKING) {
+            // v1.31.0：念注中点播放＝跳过本条注，按触发时记下的去向续行
+            concludeNote();
+            return;
+        }
+        if (noteState == NOTE_LEADIN) {
+            // v1.31.0：前导中点播放：音频已就绪立即开念，未就绪跳过本条
+            if (noteAudioReady) {
+                noteLeadInEndsAt = 0;
+                beginNotePlayback();
+            } else {
+                concludeNote();
+            }
+            return;
+        }
         if (followPhase == FOLLOW_GAP) {
             // v1.4.3：gap 中点播放＝跳过等待，立即从下一句开头继续
             advanceFollowSentence();
@@ -1600,6 +2136,7 @@ public class PlayerService extends Service {
     }
 
     public void stopAll() {
+        cancelNoteCue(); // v1.31.0：停止时先把念注播放器摘掉，别留孤儿声音
         saveCurrentPosition();
         abandonFocus();
         playing = false;
@@ -1637,6 +2174,14 @@ public class PlayerService extends Service {
             syncSession();
             // v1.4.3：跟读中 seek 后按落点重新同步当前句（gap 中的 seek 亦取消等待）
             resyncFollowAfterSeek(target);
+            // v1.31.0：念注中 seek＝中止本条注（按触发前播停态决定是否接上
+            // 正文）；未在念注时只按落点重定指针（身后不补念、身前重新待发）
+            if (noteState != NOTE_IDLE) {
+                boolean wp = noteWasPlaying;
+                cancelNoteCue();
+                if (wp && !playing) resumeMainAfterNote();
+            }
+            resyncNoteCues(target);
         } catch (Exception ignored) {
         }
     }
@@ -1915,6 +2460,14 @@ public class PlayerService extends Service {
         handler.removeCallbacks(ticker);
         stopFollowLoop();
         stopChapterLoop();
+        stopNoteLoop(); // v1.31.0
+        cancelNoteCue();
+        if (noteEngine != null) {
+            try {
+                noteEngine.release();
+            } catch (Exception ignored) {
+            }
+        }
         abandonFocus();
         saveCurrentPosition();
         if (mp != null) {

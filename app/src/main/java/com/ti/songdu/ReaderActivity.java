@@ -123,6 +123,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     /** v1.9.0 注释开关与选定版本（"zhijie" 张居正（默认） / "jizhu" 朱熹 / "gengfu" 耕夫讲经典（v1.20.5）），独立持久化 */
     private boolean notesOn;
     private String notesVer = "zhijie";
+    /** v1.31.0 念注听法（reader_prefs/listenNotes，与 PlayerService 同一个键、服务为真源） */
+    private TextView btnRListenNotes;
+    private Boolean lastListenNotes = null;
+    /** 上次推给 JS 的「正在念注」触发句（去重）；-2＝还没推过 */
+    private int lastNoteSpeakingFlat = -2;
     /** 本书是否有注数据（仅《大学》《中庸》内容包在 ContentRepo 挂得上注） */
     private boolean hasNotes;
 
@@ -207,6 +212,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnMark2 = findViewById(R.id.btnMark2);
         btnMark3 = findViewById(R.id.btnMark3);
         btnRNotes = findViewById(R.id.btnRNotes);
+        btnRListenNotes = findViewById(R.id.btnRListenNotes);
         readerNoteBar = findViewById(R.id.readerNoteBar);
         readerNoteText = findViewById(R.id.readerNoteText);
         readerNoteFooter = findViewById(R.id.readerNoteFooter);
@@ -332,6 +338,25 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             // 点开：先弹选版小窗，选定后才开启（取消则保持关闭）
             showNoteVerChooser();
         });
+        btnRListenNotes.setOnClickListener(v -> {
+            PlayerService svc = PlayerService.instance;
+            boolean now = svc != null ? svc.noteCuesEnabled
+                    : prefs.getBoolean("listenNotes", false);
+            if (now) {
+                setListenNotes(false);
+                return;
+            }
+            if (!hasNotes) {
+                Toast.makeText(this, "本书暂无注释数据", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            // 开之前先保本书＋当前版本的注音频包就绪：就绪直接开，未就绪走下载引导
+            if (TtsPackStore.isReady(this, book.bookId, notesVer)) {
+                setListenNotes(true);
+            } else {
+                ensureNotePackThenEnable();
+            }
+        });
         btnRFont = findViewById(R.id.btnRFont);
         btnRFont.setOnClickListener(v -> showFontPanel());
         btnRScript.setOnClickListener(v -> {
@@ -402,6 +427,20 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         boolean showRecite = prefs.getBoolean("showReciteBtn", true);
         if (!showRecite && reciteOn) stopRecite(); // 防困死：同跟读，藏钮前先停识读
         btnRRecite.setVisibility(showRecite ? View.VISIBLE : View.GONE);
+        boolean showListenNotes = prefs.getBoolean("showListenNotesBtn", true);
+        if (!showListenNotes) {
+            // 防困死：同跟读，藏钮前先把听法关掉，别让念注开着却无处关
+            PlayerService svc = PlayerService.instance;
+            boolean lnOn = svc != null ? svc.noteCuesEnabled
+                    : prefs.getBoolean("listenNotes", false);
+            if (lnOn) {
+                if (svc != null) svc.setNoteCuesEnabled(false);
+                else prefs.edit().putBoolean("listenNotes", false).apply();
+                lastListenNotes = false;
+                refreshListenNotesButton(false);
+            }
+        }
+        btnRListenNotes.setVisibility(showListenNotes ? View.VISIBLE : View.GONE);
     }
 
     /** v1.9.0 注释开关钮呈现：与跟读钮同口径（开＝朱砂实心 pill＋白字加粗，关＝无底浅字） */
@@ -514,8 +553,159 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         web.evaluateJavascript("setNotesVer('" + ver + "')", null);
         web.evaluateJavascript("setNotesOn(true)", null);
         noteBarKey = null;
+        // v1.31.0：念注触发表按选定版本建，版本变了让服务作废重建
+        if (PlayerService.instance != null) PlayerService.instance.invalidateNoteCues();
+        // 念注开着时换了版本：新版本的音频包没下就走下载引导（取消/失败会关掉听法）
+        boolean listenOn = PlayerService.instance != null
+                ? PlayerService.instance.noteCuesEnabled
+                : prefs.getBoolean("listenNotes", false);
+        if (listenOn && !TtsPackStore.isReady(this, book.bookId, ver)) {
+            ensureNotePackThenEnable();
+        }
         refreshNotesButton();
         refreshNoteBar();
+    }
+
+    /** v1.31.0 念注听法开关的唯一落点：服务在场走服务（服务落盘 prefs），否则直写 prefs */
+    private void setListenNotes(boolean on) {
+        PlayerService svc = PlayerService.instance;
+        if (svc != null) svc.setNoteCuesEnabled(on);
+        else prefs.edit().putBoolean("listenNotes", on).apply();
+        lastListenNotes = on;
+        refreshListenNotesButton(on);
+        if (on && svc != null) svc.invalidateNoteCues(); // 包刚下好：重建触发表重新命中
+    }
+
+    private String noteVerDisplayName(String ver) {
+        switch (ver) {
+            case "zhijie":
+                return "张居正《四书直解》";
+            case "jizhu":
+                return "朱熹《四书章句集注》";
+            case "gengfu":
+                return "耕夫讲经典";
+            case "daodu":
+                return "lunyu.ai 白话导读";
+            default:
+                return ver;
+        }
+    }
+
+    private static String fmtPackSize(long bytes) {
+        if (bytes >= 1024 * 1024) {
+            return String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0);
+        }
+        return Math.max(1, bytes / 1024) + " KB";
+    }
+
+    /**
+     * v1.31.0 开念注前的音频包引导：查包索引（shixi-models 仓，与识读模型
+     * 同仓）→ 确认框（写明书名/版本/大小）→ 带进度下载 → 成功才真正打开
+     * 听法。包未上架、用户取消、下载失败都保持关闭（已开着换版本时则
+     * 关掉）并如实提示；失败给「重试」。包只存 App 私有目录，下好离线可听。
+     */
+    private void ensureNotePackThenEnable() {
+        final String bookId = book.bookId;
+        final String ver = notesVer;
+        final android.app.ProgressDialog wait = new android.app.ProgressDialog(this);
+        wait.setMessage("正在查询注释音频包…");
+        wait.setCancelable(false);
+        wait.show();
+        new Thread(() -> {
+            TtsPackStore.Index idx = null;
+            String err = null;
+            try {
+                idx = TtsPackStore.fetchIndex(this);
+            } catch (Exception e) {
+                err = e.getMessage();
+            }
+            final TtsPackStore.Index fIdx = idx;
+            final String fErr = err;
+            runOnUiThread(() -> {
+                wait.dismiss();
+                if (isFinishing()) return;
+                if (fIdx == null) {
+                    new AlertDialog.Builder(this).setTitle("没查到音频包")
+                            .setMessage("查询注释音频包失败" + (fErr != null ? "：" + fErr : "")
+                                    + "。网络好了再试一次。")
+                            .setPositiveButton("重试", (d, w) -> ensureNotePackThenEnable())
+                            .setNegativeButton("先不开了", (d, w) -> setListenNotes(false))
+                            .show();
+                    return;
+                }
+                TtsPackStore.PackEntry e = fIdx.find(bookId, ver);
+                if (e == null) {
+                    Toast.makeText(this, "《" + book.title + "》的「" + noteVerDisplayName(ver)
+                            + "」注释音频包还没备好，过几天再试", Toast.LENGTH_LONG).show();
+                    setListenNotes(false);
+                    return;
+                }
+                new AlertDialog.Builder(this).setTitle("下载注释音频包")
+                        .setMessage("听「正文＋注释」，要先把这本书的注释音频下载到手机：\n《"
+                                + book.title + "》· " + noteVerDisplayName(ver)
+                                + "，约 " + fmtPackSize(e.size)
+                                + "\n下好后存在手机本地，之后离线也能听。")
+                        .setPositiveButton("下载", (d, w) -> downloadNotePack(fIdx, e))
+                        .setNegativeButton("先不开了", (d, w) -> setListenNotes(false))
+                        .show();
+            });
+        }).start();
+    }
+
+    private void downloadNotePack(final TtsPackStore.Index idx, final TtsPackStore.PackEntry e) {
+        final android.app.ProgressDialog pd = new android.app.ProgressDialog(this);
+        pd.setTitle("下载注释音频包");
+        pd.setMessage("《" + book.title + "》· " + noteVerDisplayName(e.version));
+        pd.setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL);
+        pd.setMax(100);
+        pd.setCancelable(false);
+        pd.show();
+        new Thread(() -> {
+            String err = null;
+            try {
+                TtsPackStore.downloadPack(this, e, idx.tree, (done, total) ->
+                        runOnUiThread(() -> {
+                            if (total > 0) pd.setProgress((int) (done * 100 / total));
+                        }));
+            } catch (Exception ex) {
+                err = ex.getMessage();
+            }
+            final String fErr = err;
+            runOnUiThread(() -> {
+                pd.dismiss();
+                if (isFinishing()) return;
+                if (fErr == null) {
+                    setListenNotes(true);
+                    Toast.makeText(this, "音频包下好了，播放时会把注释念出来",
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    new AlertDialog.Builder(this).setTitle("下载失败")
+                            .setMessage(String.valueOf(fErr))
+                            .setPositiveButton("重试", (d, w) -> downloadNotePack(idx, e))
+                            .setNegativeButton("先不开了", (d, w) -> setListenNotes(false))
+                            .show();
+                }
+            });
+        }).start();
+    }
+
+    /** v1.31.0 念注听法钮呈现：与注释钮同口径（开＝朱砂实心 pill＋白字加粗，关＝无底浅字） */
+    private void refreshListenNotesButton(boolean on) {
+        if (btnRListenNotes == null) return;
+        btnRListenNotes.setText(on ? "念注 开" : "念注 关");
+        float density = getResources().getDisplayMetrics().density;
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(999 * density);
+        if (on) {
+            g.setColor(0xFF9E3B2B);
+            btnRListenNotes.setTextColor(0xFFFFFFFF);
+            btnRListenNotes.setTypeface(null, Typeface.BOLD);
+        } else {
+            g.setColor(0x00000000);
+            btnRListenNotes.setTextColor(0xFFDDD6CB);
+            btnRListenNotes.setTypeface(null, Typeface.NORMAL);
+        }
+        btnRListenNotes.setBackground(g);
     }
 
     /** 本句要显示的注：优先选定版本，无块覆盖才按固定次序回退其他家；
@@ -562,14 +752,24 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
      */
     private void refreshNoteBar() {
         if (readerNoteBar == null) return;
-        boolean show = vertical && notesOn && hasNotes;
+        // v1.31.0：正在念注时注栏钉在被念的那块上——正文位置停在块末句尾，
+        // 当前句判定可能已滑到下一句，注栏跟着滑就与耳朵里听到的对不上；
+        // 且竖排下即使注释显示关着也临时亮出注栏（在听的注要能对上眼）
+        PlayerService svc0 = PlayerService.instance;
+        int speakFlat = -1;
+        if (svc0 != null && svc0.current != null && svc0.current.id.equals(track.id)) {
+            speakFlat = svc0.noteSpeakingFlat();
+        }
+        boolean speaking = speakFlat >= 0 && speakFlat < book.flat.size();
+        boolean show = vertical && hasNotes && (notesOn || speaking);
         readerNoteBar.setVisibility(show ? View.VISIBLE : View.GONE);
         if (!show) {
             noteBarKey = null;
             return;
         }
+        int effSentence = speaking ? speakFlat : curSentence;
         String defLab = noteVerLabel(notesVer);
-        if (curSentence < 0 || curSentence >= book.flat.size()) {
+        if (effSentence < 0 || effSentence >= book.flat.size()) {
             String key = "ph|" + notesVer;
             if (!key.equals(noteBarKey)) {
                 noteBarKey = key;
@@ -580,9 +780,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             return;
         }
         String[] usedVer = new String[1];
-        ContentRepo.NoteRef ref = displayNote(book.flat.get(curSentence), usedVer);
+        ContentRepo.NoteRef ref = displayNote(book.flat.get(effSentence), usedVer);
         if (ref == null) {
-            String key = "none|" + curSentence;
+            String key = "none|" + effSentence;
             if (!key.equals(noteBarKey)) {
                 noteBarKey = key;
                 readerNoteText.setText("本句暂无注释。");
@@ -591,13 +791,16 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             }
             return;
         }
-        String key = curSentence + "|" + notesVer + "|" + ref.startFlat;
+        String key = effSentence + "|" + notesVer + "|" + ref.startFlat + (speaking ? "|spk" : "");
         if (!key.equals(noteBarKey)) {
             noteBarKey = key;
             readerNoteText.setText(ref.text);
             String lab = noteVerLabel(usedVer[0]);
             if (!lab.isEmpty() && ref.endFlat > ref.startFlat) {
                 lab += " · 本注管第 " + (ref.startFlat + 1) + "–" + (ref.endFlat + 1) + " 句";
+            }
+            if (speaking) {
+                lab = lab.isEmpty() ? "正在朗读注释" : lab + " · 正在朗读注释";
             }
             setNoteFooter(lab);
             readerNoteScroll.scrollTo(0, 0);
@@ -800,6 +1003,19 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         if (lastFollowOn == null || lastFollowOn != fOn) {
             lastFollowOn = fOn;
             refreshFollowButton(fOn);
+        }
+        // v1.31.0 念注听法钮与服务同步（真源在服务，prefs 为同键备份）
+        boolean lnOn = svc != null ? svc.noteCuesEnabled
+                : prefs.getBoolean("listenNotes", false);
+        if (lastListenNotes == null || lastListenNotes != lnOn) {
+            lastListenNotes = lnOn;
+            refreshListenNotesButton(lnOn);
+        }
+        // v1.31.0 念注视觉标出：正在念的注块触发句变化才推 JS（-1＝清除标出）
+        int speakFlat = (svc != null && mine) ? svc.noteSpeakingFlat() : -1;
+        if (speakFlat != lastNoteSpeakingFlat) {
+            lastNoteSpeakingFlat = speakFlat;
+            web.evaluateJavascript("setNoteCue(" + speakFlat + ")", null);
         }
         // 每段字数与服务同步（字数小钮文案与说明行随之刷新）
         int cc = chunkCharsNow();

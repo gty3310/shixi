@@ -35,6 +35,9 @@ section.ch:first-child h2{margin-top:.15em}
    左侧细竖线＋浅底与正文分层；.cur 时竖线转朱砂、注文转朱砂深色、底色加深，与正文高亮同步。 */
 .ntb{display:none;}
 body.noteson .ntb{display:block;font-size:.72em;line-height:1.55;color:#6E6455;background:rgba(169,124,44,.07);border-left:3px solid #D8CDB4;padding:.5em .75em;margin:.4em 0 .9em;text-align:justify;}
+/* 念注标出（v1.31.0）：正在朗读的注块压一层朱砂底，与当前句注的 .cur 区分 */
+body.noteson .ntb.cue{background:rgba(158,59,43,.15);border-left-color:#9E3B2B;}
+.s.cue{background:rgba(158,59,43,.18);}
 body.vert .ntb{display:none !important;}
 .ntb .ntf{display:block;margin-top:.35em;font-size:.86em;color:#A97C2C;user-select:none;-webkit-user-select:none;}
 .ntb .ntf:empty{display:none;}
@@ -192,6 +195,21 @@ function setNotesOn(on){
    元素，按当前句的块归属（noteFor 的 b）定位它——同块内换句亮的是同一份；
    其余三家逐句有元素，亮当前句自己那份（与旧口径一致） */
 var curNoteEl = null;
+/* 念注标出（v1.31.0）：原生侧开念一条注时推触发句下标、念完推 -1 清除。
+   横排且注元素在场→亮注块本体；竖排（注块不进列流）或注未渲染→亮触发句
+   本身。跟随开时把标出物按当前句同一套翻页口径带进可视区 */
+var cueEl = null;
+function setNoteCue(i){
+  if (cueEl){ cueEl.classList.remove('cue'); cueEl = null; }
+  if (i < 0) return;
+  var el = null;
+  if (!isVert()) el = document.getElementById('nt' + i);
+  if (!el) el = document.getElementById('si' + i);
+  if (!el) return;
+  el.classList.add('cue');
+  cueEl = el;
+  if (followGateOn) pageToSentence(el);
+}
 function markNote(i){
   if (curNoteEl){ curNoteEl.classList.remove('cur'); curNoteEl = null; }
   if (i >= 0){
