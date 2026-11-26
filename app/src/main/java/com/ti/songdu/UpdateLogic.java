@@ -151,6 +151,19 @@ public final class UpdateLogic {
                 || f == Failure.VERIFY || f == Failure.BAD_MANIFEST;
     }
 
+    /**
+     * 下载百分比（v1.32.0 纯函数，呈现层共用）：total<=0（清单没给 size、
+     * 连接也没给出总长）返回 -1＝总量未知——呈现层改显已下载量，
+     * 不许凑假百分比；总量已知时按 done/total 取整并夹在 0..100
+     * （done 超出总量按 100 封顶，落盘另有 size 校验兜底）。
+     */
+    public static int downloadPercent(long done, long total) {
+        if (total <= 0) return -1;
+        if (done <= 0) return 0;
+        long p = done * 100 / total;
+        return p >= 100 ? 100 : (int) p;
+    }
+
     /** 下载后校验：expectedSize < 0 表示清单未给 size、跳过该项 */
     public static Verify verifyFile(long actualSize, long expectedSize,
                                     String actualSha256, String expectedSha256) {

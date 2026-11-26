@@ -55,6 +55,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 供复查），前台弹「新版已备好」、后台发通知点之即装；冷启动全校验复查
  * 就绪件，不过作废清键；就绪件低于远端新版时以下载更高版为准、新件验
  * 过后删旧件。自动关或仅-Wi-Fi 挡住时退回 v1.22.0 旧弹框流程，一字未动。
+ * v1.32.0：下载进度口径收口——百分比一律走 UpdateLogic.downloadPercent
+ * （以清单 size 为总量；总量未知返回 -1），前台弹框与后台通知同源呈现：
+ * 已知→百分比数字＋进度条＋已下载/总量，未知→只报已下载 MB、条走不
+ * 确定态，绝不摆假百分比；分片源不再拿单片长度冒充总量；回调按百分
+ * 比变化/256KB 台阶节流，不逐块刷 UI；换源仍以 (0,0,·) 信号如实重置。
  */
 public final class AppUpdater {
 
@@ -475,6 +480,9 @@ public final class AppUpdater {
 
     // ---------- 下载与安装 ----------
 
+    /** 进度回调：pct 为 UpdateLogic.downloadPercent 口径——>=0 是真百分比，
+     *  -1 表示总量未知（done/total 照给，呈现层改显已下载量）；
+     *  (0, 0, ·) 是 downloadAndVerify 的换源重置信号 */
     private interface ProgressListener {
         void onProgress(int pct, long done, long total);
     }
@@ -572,9 +580,16 @@ public final class AppUpdater {
             final DownloadResult r = downloadAndVerify(act, m, cancelled, (p2, dNow, tNow) ->
                     act.runOnUiThread(() -> {
                         if (p2 == 0 && dNow == 0) {
+                            bar.setIndeterminate(false);
                             bar.setProgress(0);
                             pct.setText("换一个来源重试…");
+                        } else if (p2 < 0) {
+                            // 总量未知：不摆假百分比，进度条走不确定态、只报已下载量
+                            bar.setIndeterminate(true);
+                            pct.setText("已下载 "
+                                    + String.format("%.1f", dNow / 1048576.0) + " MB");
                         } else {
+                            bar.setIndeterminate(false);
                             bar.setProgress(p2);
                             pct.setText(p2 + "% · "
                                     + String.format("%.1f", dNow / 1048576.0) + " / "
@@ -620,12 +635,12 @@ public final class AppUpdater {
         hookLifecycle(act);
         bgCancelled.set(false);
         final Context appCtx = act.getApplicationContext();
-        notifyDownloadProgress(appCtx, m, 0);
+        notifyDownloadProgress(appCtx, m, 0, -1, m.size > 0 ? m.size : -1);
         new Thread(() -> {
             DownloadResult r = null;
             try {
                 r = downloadAndVerify(appCtx, m, bgCancelled, (pct, dNow, tNow) ->
-                        notifyDownloadProgress(appCtx, m, pct));
+                        notifyDownloadProgress(appCtx, m, pct, dNow, tNow));
             } finally {
                 bgDownloading.set(false);
             }
@@ -661,8 +676,14 @@ public final class AppUpdater {
         }
     }
 
-    /** 下载中通知：低优先级、一条、可取消（取消钮经广播置位 bgCancelled） */
-    private static void notifyDownloadProgress(Context c, UpdateLogic.Manifest m, int pct) {
+    /**
+     * 下载中通知：低优先级、一条、可取消（取消钮经广播置位 bgCancelled）。
+     * v1.32.0 进度口径（与前台弹框同源）：总量已知→百分比＋已下载/总量，
+     * 进度条确定态；总量未知→只报已下载量、进度条不确定态，不摆假百分比；
+     * done<0 是还没开下的初始态，(pct=0, done=0) 是换源重置信号。
+     */
+    private static void notifyDownloadProgress(Context c, UpdateLogic.Manifest m,
+                                               int pct, long done, long total) {
         try {
             ensureChannels(c);
             NotificationManager nm = (NotificationManager)
@@ -672,11 +693,28 @@ public final class AppUpdater {
             ci.setAction(UpdateActionReceiver.ACTION_CANCEL_DOWNLOAD);
             PendingIntent cancelPi = PendingIntent.getBroadcast(c, 0, ci,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            final String text;
+            final boolean indet;
+            if (done < 0) {
+                text = "准备下载…";
+                indet = true;
+            } else if (pct == 0 && done == 0) {
+                text = "换一个来源重试…";
+                indet = true;
+            } else if (pct < 0) {
+                text = "已下载 " + String.format("%.1f", done / 1048576.0) + " MB";
+                indet = true;
+            } else {
+                text = "已下载 " + pct + "% · "
+                        + String.format("%.1f", done / 1048576.0) + " / "
+                        + String.format("%.1f", total / 1048576.0) + " MB";
+                indet = false;
+            }
             Notification.Builder b = new Notification.Builder(c, CH_DOWNLOAD)
                     .setSmallIcon(android.R.drawable.stat_sys_download)
                     .setContentTitle("弦歌新版 v" + m.versionName + " 正在下载")
-                    .setContentText(pct > 0 ? ("已下载 " + pct + "%") : "准备下载…")
-                    .setProgress(100, pct, pct <= 0)
+                    .setContentText(text)
+                    .setProgress(100, Math.max(pct, 0), indet)
                     .setOngoing(true)
                     .setOnlyAlertOnce(true)
                     .addAction(new Notification.Action.Builder(
@@ -737,6 +775,8 @@ public final class AppUpdater {
         File part = new File(dir, name + ".part");
         long total = m.size > 0 ? m.size : -1;
         long done = 0;
+        int lastPct = -2;        // 上次回调的百分比（-2＝尚未回调）
+        long lastShownDone = -1; // 上次回调的已下载量（总量未知时按台阶节流）
         try (OutputStream out = new FileOutputStream(part)) {
             for (String url : src.urls) {
                 HttpURLConnection c = open(url);
@@ -745,7 +785,13 @@ public final class AppUpdater {
                     c.disconnect();
                     throw new HttpException(code);
                 }
-                if (total < 0) total = c.getContentLengthLong();
+                // 总量口径（v1.32.0）：清单 size 最可信；清单没给时，仅整件源
+                // 可采信该连接的总长——分片源的单片长度不是整件总量，
+                // 拿它算百分比会在第一片下完时假报 100%，故分片保持未知
+                if (total < 0 && src.urls.length == 1) {
+                    long cl = c.getContentLengthLong();
+                    if (cl > 0) total = cl;
+                }
                 try (InputStream in = new BufferedInputStream(c.getInputStream())) {
                     byte[] buf = new byte[16384];
                     int n;
@@ -753,8 +799,17 @@ public final class AppUpdater {
                         if (cancelled.get()) throw new CancelledException();
                         out.write(buf, 0, n);
                         done += n;
-                        if (total > 0 && pl != null) {
-                            pl.onProgress((int) Math.min(100, done * 100 / total), done, total);
+                        if (pl != null) {
+                            int pct = UpdateLogic.downloadPercent(done, total);
+                            // 节流：百分比变了才刷；总量未知时按 256KB 台阶刷，
+                            // 不逐块（16KB）刷 UI/通知
+                            boolean fire = pct >= 0 ? pct != lastPct
+                                    : lastShownDone < 0 || done - lastShownDone >= 262144;
+                            if (fire) {
+                                lastPct = pct;
+                                lastShownDone = done;
+                                pl.onProgress(pct, done, total);
+                            }
                         }
                     }
                 } finally {
@@ -770,6 +825,8 @@ public final class AppUpdater {
             part.delete();
             throw new CancelledException();
         }
+        // 收尾必报一次真实终点（总量已知且下满时即 100%，随后走校验/安装）
+        if (pl != null) pl.onProgress(UpdateLogic.downloadPercent(done, total), done, total);
         return part;
     }
 

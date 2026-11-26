@@ -18,6 +18,18 @@ public class UpdateHarness {
         else { failed++; System.out.println("  FAIL " + name); }
     }
 
+    /** 按 16KB 一块模拟整件下载：百分比须单调不减、首块>0 前为 0、末块恰 100 */
+    static boolean percentMonotonic() {
+        long total = 43029663L;
+        int prev = 0;
+        for (long done = 0; done < total; done += 16384) {
+            int p = UpdateLogic.downloadPercent(Math.min(done + 16384, total), total);
+            if (p < prev || p > 100) return false;
+            prev = p;
+        }
+        return prev == 100;
+    }
+
     static final String FULL = "{"
             + "\"versionCode\":46,\"versionName\":\"1.22.0\","
             + "\"apkFileName\":\"xiange-v1220.apk\",\"size\":36500000,"
@@ -183,6 +195,21 @@ public class UpdateHarness {
         check("decide: ready == remote but ignored -> NONE (ignore wins)",
                 UpdateLogic.decideAutoDownload(true, true, true, false, true, 48, 48, 47)
                         == UpdateLogic.AutoDecision.NONE);
+
+        // ---------- 下载百分比（v1.32.0） ----------
+        check("percent: 0/43029663 -> 0", UpdateLogic.downloadPercent(0, 43029663L) == 0);
+        check("percent: half -> 50", UpdateLogic.downloadPercent(21514831L, 43029662L) == 50);
+        check("percent: floor not round (1/3 -> 33)",
+                UpdateLogic.downloadPercent(1, 3) == 33);
+        check("percent: done == total -> 100",
+                UpdateLogic.downloadPercent(43029663L, 43029663L) == 100);
+        check("percent: done > total clamps to 100",
+                UpdateLogic.downloadPercent(44000000L, 43029663L) == 100);
+        check("percent: total -1 (清单无 size) -> -1 unknown",
+                UpdateLogic.downloadPercent(123456, -1) == -1);
+        check("percent: total 0 -> -1 unknown", UpdateLogic.downloadPercent(123456, 0) == -1);
+        check("percent: done<=0 with total -> 0", UpdateLogic.downloadPercent(-5, 100) == 0);
+        check("percent: monotonic over chunks of a 43MB file", percentMonotonic());
 
         System.out.println("TOTAL passed=" + passed + " failed=" + failed);
         if (failed > 0) System.exit(1);
