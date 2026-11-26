@@ -3,6 +3,26 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.31.0] - 2026-11-26
+
+发布提交：e989a6c · 对比：https://github.com/gty3310/shixi/compare/v1.30.0...v1.31.0 · 标签 v1.31.0
+
+### 新增
+- 听法「正文＋注释」（念注）：阅读页底部第二行新增「念注」钮（与注释钮同款朱砂 pill 呈现；设置页「阅读」段可显隐，隐藏前先关听法防困死），听法二选一持久化于 reader_prefs/listenNotes、默认关（只听正文＝旧行为）。开启后：正文逐句播，播到带注句（注块末句，与阅读页「只显一次」同口径）句末暂停正文，前导 600ms 停顿区分正文与注，随后念该注全文，念完自动续播；触发口径与阅读页 displayNote 完全一致——选定注释版本优先、缺则按直解→集注→耕夫→导读回退，注块的实际版本决定取哪个包。覆盖三本书全部注释版本（大学 直解/集注/耕夫，中庸 直解/集注，论语 导读），无注句直过。触发框架为纯逻辑 NoteCuePlan（触发表：触发句=注块末句、触发点=该句在整轨时间轴上的句末，倍速经时间轴 scale 统一缩放；无音频句的触发点借相邻有声句界）＋NoteCueTracker（到点查询不消费、错位消费忽略、seek 后按位置 resync、轨尾 consumeUpTo 补念）；PlayerService 以 50ms 巡查驱动（提前量与跟读同公式），念注走独立 MediaPlayer、PlaybackParams 按 store.speed 施加（音频包为自然语速、缓存/包与倍速无关）
+- 念注引擎＝云端预生成音频包（引擎选型经用户拍板：本地 sherpa-onnx TTS 方案取消）：NoteTtsEngine 接口输入「书＋实际版本＋注块键」输出本地可播放文件，注块键＝注数据条目键（块首句 id，与服务端打包线 blocks 清单、包内 manifest 的 key 同口径）。实现 PackNoteTtsEngine＋TtsPackStore：包按书＋版本一份，存 Gitee 私有仓 shixi-models 的 tts-packs/（与识读 ASR 模型同仓、同令牌、同 git blob 通道），索引 packs.json{bookId,version,file,size,md5,parts}，zip 内含 manifest.json{bookId,version,entries[{key,file,durationMs}]}＋mp3；下载支持整件与 2MiB 分片双路，逐件验 size＋md5（按落盘文件现算），ZipExtract 解压带路径越界（zip-slip）防护，staging 区验 manifest（书/版本对得上、条目非空）后整目录换入 App 私有目录 files/tts-packs/<bookId>/<version>/，失败不动已就绪旧包。包未下载时引擎回 ERR_NOT_DOWNLOADED，服务置 ncPackMissing 停发全部后续触发——正文播放零空停顿；包在但单条注不在包内只跳过该条
+- 阅读页下载引导：开念注前本书＋当前版本的包未就绪→查索引（转圈不可取消）→确认框写明书名、版本全名与包大小→带进度下载→成功才真正打开听法并 toast；包未上架如实提示「还没备好」、查询/下载失败给「重试」、取消或失败保持关闭；念注开着时切换注释版本同理走引导（新包未下不静默失声）。设置页选注释版本只写 prefs，服务靠触发表绑定键（轨 id＋版本＋声线）自动重建
+- 念注视觉标出：PlayerService.noteSpeakingFlat 暴露正在念的注块末句下标，阅读页轮询同步——横排 reader.html setNoteCue 给该注块元素加 .cue（朱砂底＋左边框）并在跟随开启时带入可视区，竖排/无注块元素时亮该句；竖排原生注栏在念注时钉住被念块（注栏关着也临时亮起）、页脚加「正在朗读注释」
+
+### 口径不动
+- 遍数判定仍只看正文音频进度（章监测在念注状态下整体让位、恢复后按新基线续测，念注停顿不产生遍数也不误判）；章界处理（单章循环回章首/章末停）与整轨完成在「正在念注」时押后——由章监测与 onCompletion 在执行前拦截、改走念注状态机，注念完后由 concludeNote 按押后类型（RESUME/CHAPTER/COMPLETION）续行，注不被掐断；轨尾押后的注只取 cue 表中触发点已过轨尾的最后一条，中途旧注不补念；听读并行双层循环不变；跟读模式、识读判读中不触发念注；用户暂停/切轨/切声/seek/关听法一律先收念注再走原路径
+
+### 验收
+- 桌面 harness：tools/notecue_harness/NoteCueHarness 34 项全过（输出存 harness_output_framework.txt）——块末触发与版本优先/回退、嵌套块（集注）内外块各自触发、无音频句块末借界定位、scale 缩放、空注跳过、tracker 到点/错位消费/resync/consumeUpTo、注块键＝块首句 id 对齐、ZipExtract 正常解压与 ../ 越界条目拒绝（原合成缓存层用例随 NoteAudioCache 删除撤下：包式引擎无逐句合成缓存，包本身即本地存量）
+- 构建与包身份：bash build-manual.sh 全量通过；aapt badging 实测 versionCode 55 / versionName 1.31.0；BuildInfo 构建短号＝发布提交 e989a6c（dex 内实查）；dex 内实查 TtsPackStore、PACK_NOT_DOWNLOADED、tts-packs/packs.json 在位。APK size 43029663、md5 8000fbcca1ae328d0e4c66f62a27a9c0、sha256 c519c6166b71f1f0aec94a83024dbda70f054a922370bd18bddbebe3984848be
+- 通道回读：GitHub Release v1.31.0 下载回读 APK md5 与本地逐字一致、update.json 与本地逐字节相同；Drive「安装文件」弦歌-v1310.apk（file/d/1ptwNFYW-X5o5R1g1knvRaUHTbSDplIvh）回读 size/md5 一致、旧版 v1.30 已移回收站（夹内只留最新版）；Gitee 发行仓 Release（id 1370418）已建、说明已换本版文案，update.json（1010 B）与 APK 整件（43,029,663 B）均上传成功、附件清单回读 size 一致（私有仓附件直链回读 403 系既有现象，与 v1.30 同口径以 size 级核对，App 更新走 GitHub 兜底不受影响）
+- 行为层未验：本版为新功能、非修 bug，按规矩未过模拟器（本 VM 无 KVM 起不了）；念注状态机与 Android 胶水层只有代码复核＋编译级验证。真机待验：暂停/续播衔接听感、600ms 前导手感、章界/轨尾押后实况、视觉标出滚动、包下载真机速度与音质
+- 音频包上架状态：六个包（大学直解/集注/耕夫、中庸直解/集注、论语导读）由服务端合成线按本版契约（shixi-models 仓 tts-packs/packs.json 索引＋zip＋manifest、key＝注块键）陆续上架；截至发版时包尚未上架，App 内开念注会如实提示未备好/走下载引导，不影响只听正文
+
 ## [1.30.0] - 2026-11-19
 
 发布提交：37bab0d · 对比：https://github.com/gty3310/shixi/compare/v1.29.0...v1.30.0 · 标签 v1.30.0
