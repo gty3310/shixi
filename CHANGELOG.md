@@ -5,7 +5,7 @@
 
 ## [1.34.0] - 2026-11-27
 
-发布提交：待发布时回填 · 标签 v1.34.0（本地已打、未推送）
+发布提交：3a67063 · 对比：https://github.com/gty3310/shixi/compare/v1.33.0...v1.34.0 · 标签 v1.34.0
 
 ### 修复
 - 念注缺陷 1（v1.31 引入，用户 2026-11-27 真机实报）：《论语》正文＋注释模式下只有第一篇念注、第二篇起全灭。根因＝下标空间错位：NoteRef.startFlat/endFlat 是整本书拉平坐标（ContentRepo.attachNotes 在整本上标定），而《论语》取书按篇切片、篇内下标 0 起（bookForTrack），NoteCuePlan.build 拿篇内下标与全书坐标比对，只有偏移为 0 的第一篇能建出 cue。系统性修法（路线①：边界单一契约）：NoteCuePlan 类头立「空间契约」——本类全部下标同属入参列表自身空间；新增唯一重定基入口 NoteCuePlan.rebase（无交集返回 null、部分交叠夹紧）；ContentRepo.Book 新增 flatBase 字段（整本恒 0、论语单篇＝篇前句数之和，bookForTrack 切片时唯一标定）；PlayerService.ensureNoteCues 的 refIn 适配改为委托 rebase（base/size 取自 Book），全仓再无第二处下标平移。《大学》《中庸》不切片、flatBase 恒 0，行为不变（harness 逐节断言含此项）
@@ -15,11 +15,11 @@
 - 缺陷 1 硬验证（真实数据桌面 harness，先复现→后修复→再复跑）：新增 tools/notecue_harness/NoteCueSliceHarness，数据制备镜像 ContentRepo.load＋attachNotes、被测本体为 NoteCuePlan.build/rebase。修复前基线（legacy 模式＝v1.33 适配）：10 过 98 败，论语导读逐篇实建 [16,0,0,…,0]（期望 [16,24,26,26,27,28,37,21,30,18,25,24,30,47,41,14,26,11,25,3]，整本 499 条），输出存 harness_output_v1340_prefix_baseline.txt；修复后（fixed 模式）：108 过 0 败——三书全部版本逐篇（节）断言切片建表与整本建表按篇归属的条数与注块键序列完全一致，输出存 harness_output_v1340.txt；既有 NoteCueHarness 框架回归 34/34，输出存 harness_output_v1340_regression.txt
 - 缺陷 2 仅代码层确认、**待真机息屏验证**：锁纪律处置与真空期核查见上；本 VM 无 KVM、安卓模拟器起不来，本版未过模拟器——按修 bug 规矩如实标注，不称已验证修复。真机待验：息屏/切后台时注照常念完并接回正文、前导期息屏不冻住、连续多条注锁无泄漏（10 分钟硬上限兜底）
 - 构建与包身份：bash build-manual.sh 全量通过；aapt badging 实测 versionCode 58 / versionName 1.34.0；dex 内实查 rebase、songdu:noteCue 在位。APK size 43037855、md5 a7adcd748829ba2e79758be354524e6c、sha256 c7044187b3fbc871cf5db7a4d039c9729502ff6af28aebbce730f08b07ca277d；tools/check_single_writer.sh 绿灯（未触碰遍数记账）
-- 发布状态：本地就绪（提交＋tag v1.34.0），未推送、未建 Release、未传 Drive——待主 agent 复核 diff 后另行发布。（v1.33.0 的 Gitee 附件补传与回填是另一摊，与本版无关，本版未动）
+- 通道回读：GitHub 已推送 main 与 tag v1.34.0、Release（「弦歌 v1.34.0」）已建，整件下载回读 APK md5/sha256 与本地逐字一致、update.json 逐字节相同；Drive「安装文件」弦歌-v1340.apk（file/d/1IuZbi2jgGUUomE2Luk_jFFL9tI397dXY）回读 size/md5 一致，v1.33.0 已移回收站（夹内只留最新版）；Gitee 发行仓 Release（id 1377040）已建、update.json 已传（1,090 B，附件清单 size 级一致，私有仓直链内容回读 403 系既有现象），但 **APK 附件两次上传均被服务端断开**（一次发送途中 SSL EOF、一次整件发完等响应时 RemoteDisconnected），附件未落盘、该通道未完成——App 更新走 GitHub 兜底不受影响，Gitee 附件待换时段补传
 
 ## [1.33.0] - 2026-11-27
 
-发布提交：待发布时回填 · 标签 v1.33.0（本地已打、未推送）
+发布提交：7450247 · 对比：https://github.com/gty3310/shixi/compare/v1.32.0...v1.33.0 · 标签 v1.33.0
 
 ### 新增
 - 自定义倍速滑杆（用户 2026-11-26 亲定并冻结状态表，本版逐条照表实现）：倍速排去掉 4.0× 预设、末位换「自定义」钮；点开就地展开滑杆，范围 0.5–3.0×、步进 0.05、带 −/＋ 微调钮（每点 ±0.05）、整档微吸附、拖动即时生效、松手后 3 秒无操作自动收起（拖动中不计时，从最后一次触碰/微调起算）。按钮三态：未设过显示「自定义」；自定义生效中显示数值本身（如 1.35×）＋选中态；改用预设后变回「自定义」但已设数值保留。滑杆展开起点＝当前生效速度；「↺ 回到上次自定义值」小钮仅当已存自定义值且与当前速度不同时显示。拖值恰等于某预设档按自定义算——亮钮只认来源标记 Store.speedCustom、不认数值，绝不双亮。切篇/切书/锁屏回来（宿主 onPause/切页）滑杆一律收起。自定义值与来源标记随 settings.json 持久化（新键 customSpeed/speedCustom），关机重开还在。不显示任何字/分换算数字；本版不做语速归一化
@@ -32,7 +32,7 @@
 - 桌面 harness：tools/speed_harness 新增 SpeedControlHarness 28 项全过（预设 6 档且无 4.0、量化网格、微吸附半步界、进度 0..50 单调步长 0.05 与往返一致、格式去尾零），旧 SpeedHarness（v1.20.2 改速重启/FollowGate）14 项回归全过，输出存 tools/speed_harness/harness_output_v1330.txt；tools/check_single_writer.sh 绿灯（本版未触碰记账写入点）
 - 构建与包身份：bash build-manual.sh 全量通过；aapt badging 实测 versionCode 57 / versionName 1.33.0；dex 内实查 SpeedPanelView、SpeedControl、applySpeedLive、customSpeed/speedCustom 与「↺ 回到上次自定义值」文案在位。APK size 43033759、md5 2de65934140290160b0d84953a381467、sha256 4ecfc9d8158d715f7cb362bf1b2fbf85aea10d00d3c0511cd8579d570c03ffa0
 - 行为层未验：本版为新功能、非修 bug，按规矩未过模拟器（本 VM 无 KVM）；面板状态机属 Android 视图层，靠逐条对照冻结状态表的代码复核自证，无桌面 harness 覆盖。真机待验：拖动手感与音质（拖动中直改参数可能有轻微毛刺、松手定版后走内部重启恢复干净）、3 秒自动收起计时、阅读页面板展开占位、自定义值重启保留
-- 发布状态：本地就绪（提交＋tag v1.33.0），未推送、未建 Release、未传 Drive、远端 update.json 未动——待主 agent 复核 diff 后另行发布
+- 通道回读（终局）：GitHub 已推送 main 与 tag v1.33.0、Release 已建，整件下载回读 APK md5/sha256 与本地逐字一致、update.json 逐字节相同；Drive「安装文件」弦歌-v1330.apk 回读 size/md5 一致（其后于 v1.34.0 发版时移入回收站，夹内只留最新版）；Gitee 发行仓 Release（id 1376753）已建、update.json 已传（984 B，size 级一致），但 **APK 附件当晚三次上传均被服务端断开、其后随 v1.34.0 发版再试亦未成，附件至今缺失**、该通道未完成——App 更新走 GitHub 兜底不受影响
 
 ## [1.32.0] - 2026-11-26
 
