@@ -3,6 +3,23 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.33.0] - 2026-11-27
+
+发布提交：待发布时回填 · 标签 v1.33.0（本地已打、未推送）
+
+### 新增
+- 自定义倍速滑杆（用户 2026-11-26 亲定并冻结状态表，本版逐条照表实现）：倍速排去掉 4.0× 预设、末位换「自定义」钮；点开就地展开滑杆，范围 0.5–3.0×、步进 0.05、带 −/＋ 微调钮（每点 ±0.05）、整档微吸附、拖动即时生效、松手后 3 秒无操作自动收起（拖动中不计时，从最后一次触碰/微调起算）。按钮三态：未设过显示「自定义」；自定义生效中显示数值本身（如 1.35×）＋选中态；改用预设后变回「自定义」但已设数值保留。滑杆展开起点＝当前生效速度；「↺ 回到上次自定义值」小钮仅当已存自定义值且与当前速度不同时显示。拖值恰等于某预设档按自定义算——亮钮只认来源标记 Store.speedCustom、不认数值，绝不双亮。切篇/切书/锁屏回来（宿主 onPause/切页）滑杆一律收起。自定义值与来源标记随 settings.json 持久化（新键 customSpeed/speedCustom），关机重开还在。不显示任何字/分换算数字；本版不做语速归一化
+- 实现收口：新增纯逻辑 SpeedControl（预设/范围/量化/吸附/格式单一出处）＋共用视图 SpeedPanelView，主页播放条与阅读页播放条同一实现同一口径；阅读页旧「点速度钮轮换下一档」cycleSpeed 废除，改点速度数字展开/收起同一面板。旧两处 SPEEDS/SPEED_LABELS 双份常量删除。拖动预览走新增 PlayerService.applySpeedLive（只改播放参数与现行值、不落盘、不走改速内部重启，防逐格重启抖动），松手定版走既有 setSpeed（落盘＋v1.20.2 内部重启的干净改速）
+
+### 改进
+- 跟读说明改浮层（提交 7ef9314，本版一并发布）：阅读页底部常驻的跟读说明行与跟读调试读数行删除；点开「跟读」开关时说明以悬浮气泡显示 3 秒自动消失（showFollowHintBubble），底部不再常驻占位
+
+### 验收
+- 桌面 harness：tools/speed_harness 新增 SpeedControlHarness 28 项全过（预设 6 档且无 4.0、量化网格、微吸附半步界、进度 0..50 单调步长 0.05 与往返一致、格式去尾零），旧 SpeedHarness（v1.20.2 改速重启/FollowGate）14 项回归全过，输出存 tools/speed_harness/harness_output_v1330.txt；tools/check_single_writer.sh 绿灯（本版未触碰记账写入点）
+- 构建与包身份：bash build-manual.sh 全量通过；aapt badging 实测 versionCode 57 / versionName 1.33.0；dex 内实查 SpeedPanelView、SpeedControl、applySpeedLive、customSpeed/speedCustom 与「↺ 回到上次自定义值」文案在位。APK size 43033759、md5 2de65934140290160b0d84953a381467、sha256 4ecfc9d8158d715f7cb362bf1b2fbf85aea10d00d3c0511cd8579d570c03ffa0
+- 行为层未验：本版为新功能、非修 bug，按规矩未过模拟器（本 VM 无 KVM）；面板状态机属 Android 视图层，靠逐条对照冻结状态表的代码复核自证，无桌面 harness 覆盖。真机待验：拖动手感与音质（拖动中直改参数可能有轻微毛刺、松手定版后走内部重启恢复干净）、3 秒自动收起计时、阅读页面板展开占位、自定义值重启保留
+- 发布状态：本地就绪（提交＋tag v1.33.0），未推送、未建 Release、未传 Drive、远端 update.json 未动——待主 agent 复核 diff 后另行发布
+
 ## [1.32.0] - 2026-11-26
 
 发布提交：8e8eda3 · 对比：https://github.com/gty3310/shixi/compare/v1.31.0...v1.32.0 · 标签 v1.32.0

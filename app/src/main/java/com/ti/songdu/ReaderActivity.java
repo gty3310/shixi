@@ -66,8 +66,8 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     /** v1.16.0 复习页跳回原句：带内容包句子 id，打开后定位到该句 */
     public static final String EXTRA_SCROLL_SENT_ID = "reader_scroll_sent_id";
 
-    private static final float[] SPEEDS = {0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f};
-    private static final String[] SPEED_LABELS = {"0.75×", "1.0×", "1.25×", "1.5×", "2.0×", "3.0×", "4.0×"};
+    // v1.33.0：倍速口径收口至 SpeedControl＋SpeedPanelView（与主页共用），
+    // 本类旧 SPEEDS/SPEED_LABELS 双份常量与点钮轮换 cycleSpeed 已删
     private static final String[] FONT_LABELS = {"小", "中", "大", "特大"};
 
     private Store store;
@@ -83,6 +83,32 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     private WebView web;
     private View topBar, bottomBar;
     private TextView btnRToggle, btnRSpeed, btnRLoop, btnRScript, btnRPinyin, btnROrient, btnFollow;
+    private SpeedPanelView speedPanel;
+    private View speedPanelWrap;
+    /** v1.33.0 倍速面板落地口：与主页同口径——定版走服务 setSpeed 或直写
+     *  Store，拖动预览走 applySpeedLive；定版后 refreshBarLabels 强制轮询
+     *  刷新底栏速度数字 */
+    private final SpeedPanelView.Applier speedApplier = new SpeedPanelView.Applier() {
+        @Override
+        public void commitSpeed(float v) {
+            if (PlayerService.instance != null) {
+                PlayerService.instance.setSpeed(v);
+            } else {
+                store.speed = v;
+                store.saveSettings();
+            }
+            refreshBarLabels();
+        }
+
+        @Override
+        public void liveSpeed(float v) {
+            if (PlayerService.instance != null) {
+                PlayerService.instance.applySpeedLive(v);
+            } else {
+                store.speed = v;
+            }
+        }
+    };
     /** v1.21.0 循环范围钮（整书/单章）：reader_prefs/loopScope，与章卡片、PlayerService 同源 */
     private TextView btnRLoopScope;
     private TextView btnRFollow, btnRFont;
@@ -260,7 +286,11 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         btnRToggle.setOnClickListener(v -> onToggleThisTrack());
         findViewById(R.id.btnRBack15).setOnClickListener(v -> sendSeekRel(-15000));
         findViewById(R.id.btnRFwd15).setOnClickListener(v -> sendSeekRel(15000));
-        btnRSpeed.setOnClickListener(v -> cycleSpeed());
+        speedPanelWrap = findViewById(R.id.speedPanelWrap);
+        speedPanel = new SpeedPanelView(this, store, speedApplier);
+        ((LinearLayout) speedPanelWrap).addView(speedPanel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        btnRSpeed.setOnClickListener(v -> toggleSpeedPanel());
         btnRLoop.setOnClickListener(v -> {
             loopOn = !loopOn;
             prefs.edit().putBoolean("loop", loopOn).apply();
@@ -1006,18 +1036,16 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         }
     }
 
-    private void cycleSpeed() {
-        int cur = 0;
-        for (int i = 0; i < SPEEDS.length; i++) {
-            if (Math.abs(SPEEDS[i] - store.speed) < 0.01f) cur = i;
+    /** v1.33.0：点底栏速度数字＝展开/收起倍速面板（与主页同一 SpeedPanelView）；
+     *  旧「点一下轮换到下一档」已废——预设与自定义都在面板里一次选定 */
+    private void toggleSpeedPanel() {
+        if (speedPanelWrap.getVisibility() == View.VISIBLE) {
+            speedPanel.collapse();
+            speedPanelWrap.setVisibility(View.GONE);
+        } else {
+            speedPanel.refresh();
+            speedPanelWrap.setVisibility(View.VISIBLE);
         }
-        float next = SPEEDS[(cur + 1) % SPEEDS.length];
-        if (PlayerService.instance != null) PlayerService.instance.setSpeed(next);
-        else {
-            store.speed = next;
-            store.saveSettings();
-        }
-        refreshBarLabels();
     }
 
     private void applyLoop() {
@@ -1036,9 +1064,16 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
             btnRToggle.setText(toggleLabel);
         }
         String speedLabel = speedLabelOf(store.speed);
-        if (!speedLabel.equals(lastSpeedLabel)) {
-            lastSpeedLabel = speedLabel;
+        // v1.33.0：变更键带上来源标记——数值没变、来源变了（如预设 1.5 改成
+        // 自定义 1.5）也要刷新面板的亮钮归属（状态表 4：只认来源）
+        String speedKey = speedLabel + (store.speedCustom ? "|c" : "|p");
+        if (!speedKey.equals(lastSpeedLabel)) {
+            lastSpeedLabel = speedKey;
             btnRSpeed.setText(speedLabel);
+            if (speedPanel != null && speedPanelWrap != null
+                    && speedPanelWrap.getVisibility() == View.VISIBLE) {
+                speedPanel.refresh();
+            }
         }
         // 跟读开关态与服务同步（可能被切歌自动关、或服务重启后恢复）
         boolean fOn = svc != null ? svc.followEnabled
@@ -1212,10 +1247,7 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     }
 
     private String speedLabelOf(float speed) {
-        for (int i = 0; i < SPEEDS.length; i++) {
-            if (Math.abs(SPEEDS[i] - speed) < 0.01f) return SPEED_LABELS[i];
-        }
-        return speed + "×";
+        return SpeedControl.labelOf(speed);
     }
 
     private void refreshBarLabels() {
@@ -1701,6 +1733,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
     @Override
     protected void onPause() {
         handler.removeCallbacks(poll);
+        // v1.33.0 切篇/锁屏回来倍速滑杆一律收起、面板藏回（状态表 5）
+        if (speedPanel != null) speedPanel.collapse();
+        if (speedPanelWrap != null) speedPanelWrap.setVisibility(View.GONE);
         if (PlayerService.listener == this) PlayerService.listener = null;
         super.onPause();
     }

@@ -479,6 +479,16 @@
         <!-- v1.33：原常驻的跟读说明行与跟读调试读数行已删（用户亲点）；
              跟读说明改走点开跟读时的 3 秒浮层（ReaderActivity.showFollowHintBubble），调试读数不再上屏 -->
 
+        <!-- v1.33.0 倍速面板容器：与主页共用 SpeedPanelView（同一实现、同一口径），
+             点底栏速度钮展开/收起；面板本体由 ReaderActivity 程序化装入 -->
+        <LinearLayout
+            android:id="@+id/speedPanelWrap"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="vertical"
+            android:visibility="gone" />
+
         <!-- 竖版分页页码（v1.8.0）：仅竖排时由 JS 桥回报后显示，不遮正文 -->
         <TextView
             android:id="@+id/readerPageInfo"

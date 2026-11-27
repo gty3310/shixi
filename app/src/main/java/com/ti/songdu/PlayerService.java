@@ -2205,6 +2205,15 @@ public class PlayerService extends Service {
         return store.speed;
     }
 
+    /** v1.33.0 自定义滑杆拖动预览：只改播放参数与 store.speed 现行值，不落盘、
+     *  不走改速内部重启（拖动中逐格重启会抖）；松手定版由 setSpeed 正式提交
+     *  （落盘＋内部重启的干净改速）。跟读判定等一律读 store.speed 现行值，
+     *  拖动中自然跟随，无需额外同步 */
+    public void applySpeedLive(float s) {
+        store.speed = s;
+        applySpeed();
+    }
+
     private void applySpeed() {
         if (mp != null && prepared) {
             try {

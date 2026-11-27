@@ -37,6 +37,11 @@ public class Store {
     public final List<Track> tracks = new ArrayList<>();
     public JSONObject records = new JSONObject();
     public float speed = 1.0f;
+    /** v1.33.0 自定义倍速：customSpeed＝用户上次定的自定义值（0＝从未设过）；
+     *  speedCustom＝当前 speed 的来源是否为自定义——拖值恰等于预设档也算
+     *  自定义，亮钮只认来源、不认数值（SpeedPanelView 状态表 2/4） */
+    public float customSpeed = 0f;
+    public boolean speedCustom = false;
 
     // ---------- 复制进度设置 ----------
     /** 时段键的固定顺序与中文标签（复制文本、设置页共用） */
@@ -158,6 +163,8 @@ public class Store {
             if (s != null) {
                 JSONObject o = new JSONObject(s);
                 speed = (float) o.optDouble("speed", 1.0);
+                customSpeed = (float) o.optDouble("customSpeed", 0);
+                speedCustom = o.optBoolean("speedCustom", false);
                 copyIncludeDate = o.optBoolean("copyDate", true);
                 // v1.5 迁移：旧 settings 无 copyTitle → 用默认标题句
                 copyTitle = o.optString("copyTitle", "＿＿＿读经的记录");
@@ -224,6 +231,8 @@ public class Store {
         try {
             JSONObject o = new JSONObject();
             o.put("speed", speed);
+            o.put("customSpeed", customSpeed);
+            o.put("speedCustom", speedCustom);
             o.put("copyDate", copyIncludeDate);
             o.put("copyTitle", copyTitle);
             o.put("checkinCount", checkinCount);

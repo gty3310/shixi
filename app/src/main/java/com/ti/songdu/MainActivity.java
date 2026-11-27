@@ -58,8 +58,8 @@ import java.util.Set;
 public class MainActivity extends Activity implements PlayerService.Listener {
 
     private static final String[] WEEKDAYS = {"周一", "周二", "周三", "周四", "周五", "周六", "周日"};
-    private static final float[] SPEEDS = {0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f};
-    private static final String[] SPEED_LABELS = {"0.75×", "1.0×", "1.25×", "1.5×", "2.0×", "3.0×", "4.0×"};
+    // v1.33.0：倍速口径收口至 SpeedControl＋SpeedPanelView（与阅读页共用），
+    // 本类旧 SPEEDS/SPEED_LABELS 双份常量已删，勿再本地另存一份
 
     private Store store;
 
@@ -93,7 +93,31 @@ public class MainActivity extends Activity implements PlayerService.Listener {
     public static final String EXTRA_OPEN_REVIEW_WEAK = "open_review_weak";
     private Button navReview;
     private int curPage = 0;
-    private final List<TextView> speedChips = new ArrayList<>();
+    private SpeedPanelView speedPanel;
+    /** v1.33.0 倍速面板落地口：定版走服务 setSpeed（含内部重启的干净改速）或
+     *  服务不在时直写 Store；拖动预览走 applySpeedLive。定版后 refreshAll
+     *  让卡片时长与播放条时长当下按新倍速重渲（承 v1.12.0 口径） */
+    private final SpeedPanelView.Applier speedApplier = new SpeedPanelView.Applier() {
+        @Override
+        public void commitSpeed(float v) {
+            if (PlayerService.instance != null) {
+                PlayerService.instance.setSpeed(v);
+            } else {
+                store.speed = v;
+                store.saveSettings();
+            }
+            refreshAll();
+        }
+
+        @Override
+        public void liveSpeed(float v) {
+            if (PlayerService.instance != null) {
+                PlayerService.instance.applySpeedLive(v);
+            } else {
+                store.speed = v;
+            }
+        }
+    };
     private final Map<String, View> cardViews = new HashMap<>();
     /** v1.5 分组：已展开的组名集合（持久化在 SharedPreferences；不在集合里＝折叠，默认折叠） */
     private final Set<String> expandedGroups = new HashSet<>();
@@ -193,7 +217,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         btnOverlaySub.setOnClickListener(v -> toggleOverlayWanted());
         refreshOverlayBtn();
 
-        buildSpeedChips();
+        speedPanel = new SpeedPanelView(this, store, speedApplier);
+        speedRow.addView(speedPanel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // 播放条进度可拖动：拖动时只更新时间显示，松手才 seek（并同步当前卡片进度）
         playerSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -1789,58 +1815,9 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         lastPos.setText("上次听到 " + Store.fmtTimeAt(t.positionMs, store.speed));
     }
 
-    // ---------- 速度 ----------
-    private void buildSpeedChips() {
-        speedRow.removeAllViews();
-        speedChips.clear();
-        for (int i = 0; i < SPEEDS.length; i++) {
-            final float val = SPEEDS[i];
-            TextView chip = new TextView(this);
-            chip.setText(SPEED_LABELS[i]);
-            chip.setTextSize(12);
-            chip.setGravity(Gravity.CENTER);
-            chip.setPadding(dp(6), dp(6), dp(6), dp(6));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-            if (i > 0) lp.leftMargin = dp(6);
-            chip.setLayoutParams(lp);
-            chip.setOnClickListener(v -> {
-                if (PlayerService.instance != null) {
-                    PlayerService.instance.setSpeed(val);
-                } else {
-                    store.speed = val;
-                    store.saveSettings();
-                }
-                // v1.12.0：倍速一改，卡片时长与播放条时长当下就按新倍速重渲
-                refreshAll();
-            });
-            speedChips.add(chip);
-            speedRow.addView(chip);
-        }
-        refreshSpeedChips();
-    }
-
-    private void refreshSpeedChips() {
-        for (int i = 0; i < SPEEDS.length; i++) {
-            boolean sel = Math.abs(SPEEDS[i] - store.speed) < 0.01f;
-            TextView chip = speedChips.get(i);
-            GradientDrawable g = new GradientDrawable();
-            g.setCornerRadius(dp(999));
-            if (sel) {
-                g.setColor(0xFFFFFFFF);
-                chip.setTextColor(0xFF26221C);
-                chip.setTypeface(null, Typeface.BOLD);
-            } else {
-                g.setColor(0x00000000);
-                g.setStroke(dp(1), 0xFF6F675C);
-                chip.setTextColor(0xFFDDD6CB);
-                chip.setTypeface(null, Typeface.NORMAL);
-            }
-            chip.setBackground(g);
-        }
-    }
-
     // ---------- 页面切换（v1.21.0 底部三栏：0 听读 / 1 复习 / 2 阅读计划） ----------
     private void showPage(int page) {
+        if (speedPanel != null) speedPanel.collapse(); // v1.33.0 切页收起倍速滑杆（状态表 5）
         curPage = page;
         showingCalendar = page == 2;
         if (page != 1) reviewForceWeak = false;
@@ -2771,7 +2748,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         // v1.4.2：顶部红色三数条已删除，这里不再刷新它（统计仍供卡片/日历/复制文本使用）
         buildTrackList();
         refreshPlayerBar();
-        refreshSpeedChips();
+        if (speedPanel != null) speedPanel.refresh();
         buildPlanBand();
         if (showingCalendar) {
             buildPlanPage();
@@ -3056,6 +3033,7 @@ public class MainActivity extends Activity implements PlayerService.Listener {
 
     @Override
     protected void onPause() {
+        if (speedPanel != null) speedPanel.collapse(); // v1.33.0 锁屏/切走收起倍速滑杆（状态表 5）
         if (PlayerService.listener == this) PlayerService.listener = null;
         super.onPause();
     }

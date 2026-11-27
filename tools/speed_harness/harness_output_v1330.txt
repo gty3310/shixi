@@ -1,0 +1,31 @@
+  PASS 预设 6 档
+  PASS 预设无 4.0
+  PASS 预设含 3.0
+  PASS 1.35 非预设值
+  PASS quantize 1.32→1.30
+  PASS quantize 1.33→1.35
+  PASS quantize 1.35→1.35
+  PASS quantize 下限夹 0.5
+  PASS quantize 上限夹 3.0
+  PASS snap 1.48→1.5
+  PASS snap 1.52→1.5
+  PASS snap 1.45 不动
+  PASS snap 0.76→0.75
+  PASS snap 2.98→3.0（经 fromSlider）
+  PASS 进度 0..50 单调步长 0.05、末值 3.0
+  PASS toProgress(1.35)=17
+  PASS toProgress(0.5)=0
+  PASS toProgress(3.0)=50
+  PASS 进度↔速度全程往返一致
+  PASS fromProgress 越界夹紧
+  PASS format 1.35
+  PASS format 1.5
+  PASS format 2.0
+  PASS format 0.75
+  PASS format 3.0
+  PASS format 1.10→1.1
+  PASS labelOf 预设 1.25
+  PASS labelOf 自定义 1.35
+speed control harness: 28 passed, 0 failed
+  PASS 14 手滑仍可退出跟随
+RESULT: 14 passed, 0 failed
