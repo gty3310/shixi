@@ -83,6 +83,13 @@ public class ContentRepo {
         public final List<Chapter> chapters = new ArrayList<>();
         /** 全部句子按阅读顺序拉平（与 chapters 内顺序一致），下标即阅读页的句序号 */
         public final List<Sentence> flat = new ArrayList<>();
+        /** v1.34.0：本 Book 的 flat 在「整本书 flat」中的起始下标（全书空间基址）。
+         *  整本 Book 恒 0；《论语》单篇 Book＝该篇之前各篇句数之和（bookForTrack
+         *  切片时标定，全仓唯一标定点）。Sentence.noteXx 的 NoteRef.startFlat/
+         *  endFlat 恒为全书空间（attachNotes 在整本上标定）；按子列表消费
+         *  NoteRef 前必须按消费 Book 的 flatBase 重定基（NoteCuePlan 空间契约，
+         *  唯一入口 NoteCuePlan.rebase）。 */
+        public int flatBase = 0;
         /** 原始 JSON 文本，阅读页直接注入 WebView 渲染，避免 Java 侧再序列化 */
         public String rawJson;
     }
@@ -163,6 +170,10 @@ public class ContentRepo {
         b.audioDurationMs = ch.durationMs > 0 ? ch.durationMs : full.audioDurationMs;
         b.chapters.add(ch);
         b.flat.addAll(ch.sentences);
+        // v1.34.0：切片基址＝该篇之前各篇句数之和（flatBase 契约，见 Book 字段注）
+        int base = 0;
+        for (int i = 0; i < idx; i++) base += full.chapters.get(i).sentences.size();
+        b.flatBase = base;
         b.rawJson = chapterRawJson(idx, ch, b.audioDurationMs);
         return b;
     }

@@ -451,6 +451,38 @@ public class PlayerService extends Service {
     private static final long NOTE_PREFETCH_AHEAD_MS = 90_000;
     /** 念注专用播放器（与正文 mp 分开，互不抢状态） */
     private MediaPlayer noteMp = null;
+    /** v1.34.0 念注唤醒锁（缺陷 2）：正文 mp 的锁只在正文播放时持有，而一条
+     *  注的在途窗口（前导→念诵）里正文恰被暂停放锁、noteMp 在前导期又尚未
+     *  创建——息屏后 CPU 一睡，靠 uptimeMillis 的状态机就冻住、注永远不开
+     *  口。故服务层自持一把锁罩住整条在途窗口：startNoteCue（唯一入口）
+     *  在暂停正文之前取得，concludeNote / cancelNoteCue（唯二出口）释放，
+     *  无真空期；noteMp 本体另经 configurePlayer 与正文同纪律设
+     *  setWakeMode（双保险）。acquire 带 10 分钟硬上限防万一漏放电。 */
+    private PowerManager.WakeLock noteWakeLock = null;
+    private static final long NOTE_WAKE_LOCK_MAX_MS = 10 * 60 * 1000L;
+
+    private void acquireNoteWakeLock() {
+        try {
+            if (noteWakeLock == null) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (pm == null) return;
+                noteWakeLock = pm.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK, "songdu:noteCue");
+                noteWakeLock.setReferenceCounted(false);
+            }
+            if (!noteWakeLock.isHeld()) {
+                noteWakeLock.acquire(NOTE_WAKE_LOCK_MAX_MS);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void releaseNoteWakeLock() {
+        try {
+            if (noteWakeLock != null && noteWakeLock.isHeld()) noteWakeLock.release();
+        } catch (Exception ignored) {
+        }
+    }
     /** 触发表与绑定键（曲目 id＋选定注释版本＋当前声音；切歌/切版本/切声失效重建） */
     private java.util.List<NoteCuePlan.Cue> ncCues = null;
     private final NoteCueTracker ncTracker = new NoteCueTracker();
@@ -1059,8 +1091,15 @@ public class PlayerService extends Service {
         ncCues = null;
     }
 
-    private static NoteCuePlan.RefIn refIn(ContentRepo.NoteRef r) {
-        return r == null ? null : new NoteCuePlan.RefIn(r.text, r.startFlat, r.endFlat);
+    /**
+     * 全书空间 NoteRef → 触发表空间 RefIn 的唯一适配点（v1.34.0）：NoteRef
+     * 是全书空间、NoteCuePlan 只认入参列表自身空间（见 NoteCuePlan 空间
+     * 契约），中间只许经 NoteCuePlan.rebase 按 Book.flatBase 重定基——
+     * v1.33 前本方法原样透传全书坐标，致《论语》第二篇起建表恒空（缺陷 1）。
+     */
+    private static NoteCuePlan.RefIn refIn(ContentRepo.NoteRef r, int base, int size) {
+        return r == null ? null : NoteCuePlan.rebase(
+                new NoteCuePlan.RefIn(r.text, r.startFlat, r.endFlat), base, size);
     }
 
     /**
@@ -1102,10 +1141,10 @@ public class PlayerService extends Service {
                 in.endMs = s.endMs;
                 in.noAudio = s.noAudio;
                 in.id = s.id;
-                in.zj = refIn(s.noteZj);
-                in.jz = refIn(s.noteJz);
-                in.gf = refIn(s.noteGf);
-                in.dd = refIn(s.noteDd);
+                in.zj = refIn(s.noteZj, b.flatBase, b.flat.size());
+                in.jz = refIn(s.noteJz, b.flatBase, b.flat.size());
+                in.gf = refIn(s.noteGf, b.flatBase, b.flat.size());
+                in.dd = refIn(s.noteDd, b.flatBase, b.flat.size());
                 sins.add(in);
             }
             java.util.List<NoteCuePlan.Cue> cues = NoteCuePlan.build(sins, ver, scale);
@@ -1240,6 +1279,7 @@ public class PlayerService extends Service {
         noteAudioReady = false;
         noteAudioFailed = false;
         noteAudioFile = null;
+        acquireNoteWakeLock(); // v1.34.0：先取锁再暂停正文，锁覆盖无真空（缺陷 2）
         pausePlayer(); // 正文暂停（playing=false、位置落盘、状态通知，与用户暂停同路）
         noteLeadInStartedAt = SystemClock.uptimeMillis();
         noteLeadInEndsAt = noteLeadInStartedAt + NOTE_LEAD_IN_MS;
@@ -1258,10 +1298,10 @@ public class PlayerService extends Service {
         try {
             releaseNotePlayer();
             noteMp = new MediaPlayer();
-            noteMp.setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build());
+            // v1.34.0：与正文同一套纪律——configurePlayer 含 setWakeMode
+            // (PARTIAL_WAKE_LOCK)＋音频属性（与此处原手写属性逐项相同）。
+            // 此前 noteMp 独缺唤醒模式，息屏念注无锁可依（缺陷 2）。
+            configurePlayer(noteMp);
             noteMp.setDataSource(noteAudioFile.getAbsolutePath());
             noteMp.setOnPreparedListener(p -> {
                 try {
@@ -1322,6 +1362,7 @@ public class PlayerService extends Service {
      */
     private void concludeNote() {
         if (noteState == NOTE_IDLE) return;
+        releaseNoteWakeLock(); // v1.34.0：在途窗口结束（去向由下方分支接管正文/章界/整轨）
         int after = noteAfter;
         boolean wasPlaying = noteWasPlaying;
         releaseNotePlayer();
@@ -1370,6 +1411,7 @@ public class PlayerService extends Service {
      */
     private void cancelNoteCue() {
         releaseNotePlayer();
+        releaseNoteWakeLock(); // v1.34.0：与 concludeNote 并列的唯二出口之一
         noteState = NOTE_IDLE;
         noteCueIdx = -1;
         noteCueFlat = -1;

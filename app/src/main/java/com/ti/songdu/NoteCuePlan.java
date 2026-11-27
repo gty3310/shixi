@@ -24,6 +24,17 @@ import java.util.List;
  * endMs；全书无录音句 → 不出 cue。
  *
  * cue 顺序：按 fireMs 升序，同点按 flat 升序（Tracker 按此序逐条消费）。
+ *
+ * 【空间契约——v1.34.0 立，全类唯一口径】本类的全部下标必须同属一个空间：
+ * 入参 sents 的列表位置、RefIn.startFlat/endFlat、出参 Cue.flat/blockStart/
+ * blockEnd，都是「入参 sents 列表自身的下标空间」。而 ContentRepo 的
+ * NoteRef 是在整本书拉平下标（全书空间）下标定的（attachNotes 在整本上
+ * 挂载），两者只在整本喂入时天然一致；喂的是切片 Book（如《论语》单篇，
+ * Book.flatBase＝该篇在全书的起始下标）时，适配层必须先经 rebase() 把
+ * RefIn 重定基到切片空间，才许喂入本类。适配点唯一：PlayerService
+ * .ensureNoteCues 经 refIn() 委托 rebase()；禁止任何调用方私自对下标
+ * ±偏移。回归断言见 tools/notecue_harness/NoteCueSliceHarness（真实
+ * 数据逐篇断言切片建表≡整本建表按篇归属）。
  */
 public final class NoteCuePlan {
 
@@ -75,6 +86,20 @@ public final class NoteCuePlan {
     private NoteCuePlan() {
     }
 
+    /**
+     * 空间契约的唯一重定基入口：把全书空间的 RefIn 平移到以 base 为起点、
+     * 长 size 的子列表空间（新下标＝旧下标−base）。与子列表无交集（整块在
+     * 子列表之前或之后）返回 null；部分交叠时把越界一端夹紧到子列表边界
+     * （跨界块只会在其末句所在的那一片触发一次，语义不丢不重）。
+     */
+    public static RefIn rebase(RefIn r, int base, int size) {
+        if (r == null) return null;
+        if (r.endFlat < base || r.startFlat >= base + size) return null;
+        int s = Math.max(0, r.startFlat - base);
+        int e = Math.min(size - 1, r.endFlat - base);
+        return new RefIn(r.text, s, e);
+    }
+
     private static RefIn refOf(SentIn s, String ver) {
         if ("zhijie".equals(ver)) return s.zj;
         if ("jizhu".equals(ver)) return s.jz;
@@ -105,7 +130,7 @@ public final class NoteCuePlan {
         return null;
     }
 
-    /** 建触发表；sents 为全书拉平序（下标即 flat），scale 为句时间缩放系数 */
+    /** 建触发表；sents 的下标即本类空间（见类头空间契约），scale 为句时间缩放系数 */
     public static List<Cue> build(List<SentIn> sents, String selectedVer, double scale) {
         List<Cue> out = new ArrayList<>();
         if (sents == null || sents.isEmpty()) return out;

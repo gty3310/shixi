@@ -3,6 +3,20 @@
 本项目按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 维护，
 版本号遵循语义化版本。每版条目记发布提交短 hash 与对比链接。
 
+## [1.34.0] - 2026-11-27
+
+发布提交：待发布时回填 · 标签 v1.34.0（本地已打、未推送）
+
+### 修复
+- 念注缺陷 1（v1.31 引入，用户 2026-11-27 真机实报）：《论语》正文＋注释模式下只有第一篇念注、第二篇起全灭。根因＝下标空间错位：NoteRef.startFlat/endFlat 是整本书拉平坐标（ContentRepo.attachNotes 在整本上标定），而《论语》取书按篇切片、篇内下标 0 起（bookForTrack），NoteCuePlan.build 拿篇内下标与全书坐标比对，只有偏移为 0 的第一篇能建出 cue。系统性修法（路线①：边界单一契约）：NoteCuePlan 类头立「空间契约」——本类全部下标同属入参列表自身空间；新增唯一重定基入口 NoteCuePlan.rebase（无交集返回 null、部分交叠夹紧）；ContentRepo.Book 新增 flatBase 字段（整本恒 0、论语单篇＝篇前句数之和，bookForTrack 切片时唯一标定）；PlayerService.ensureNoteCues 的 refIn 适配改为委托 rebase（base/size 取自 Book），全仓再无第二处下标平移。《大学》《中庸》不切片、flatBase 恒 0，行为不变（harness 逐节断言含此项）
+- 念注缺陷 2（同日实报）：息屏/切后台时注释不出声（正文照常）。根因＝注释链无唤醒锁纪律：正文 mp 经 configurePlayer 设 setWakeMode(PARTIAL_WAKE_LOCK)，noteMp 此前独缺；且念注在途窗口（前导 600ms 起、最长 20s）里正文被 pausePlayer 暂停放锁、noteMp 尚未创建，存在无锁真空期，状态机时钟 uptimeMillis 随 CPU 休眠冻结、注被无限押后。修法：noteMp 改走 configurePlayer 与正文同纪律（唤醒模式＋音频属性逐项相同）；服务层另持专用 WakeLock（songdu:noteCue）罩住整条在途窗口——startNoteCue（唯一入口）在暂停正文之前取得，concludeNote／cancelNoteCue（唯二出口，noteState 全部赋值点已逐一核对）释放，前导/念诵/押后待念全程无真空；acquire 带 10 分钟硬上限防漏放电
+
+### 验收
+- 缺陷 1 硬验证（真实数据桌面 harness，先复现→后修复→再复跑）：新增 tools/notecue_harness/NoteCueSliceHarness，数据制备镜像 ContentRepo.load＋attachNotes、被测本体为 NoteCuePlan.build/rebase。修复前基线（legacy 模式＝v1.33 适配）：10 过 98 败，论语导读逐篇实建 [16,0,0,…,0]（期望 [16,24,26,26,27,28,37,21,30,18,25,24,30,47,41,14,26,11,25,3]，整本 499 条），输出存 harness_output_v1340_prefix_baseline.txt；修复后（fixed 模式）：108 过 0 败——三书全部版本逐篇（节）断言切片建表与整本建表按篇归属的条数与注块键序列完全一致，输出存 harness_output_v1340.txt；既有 NoteCueHarness 框架回归 34/34，输出存 harness_output_v1340_regression.txt
+- 缺陷 2 仅代码层确认、**待真机息屏验证**：锁纪律处置与真空期核查见上；本 VM 无 KVM、安卓模拟器起不来，本版未过模拟器——按修 bug 规矩如实标注，不称已验证修复。真机待验：息屏/切后台时注照常念完并接回正文、前导期息屏不冻住、连续多条注锁无泄漏（10 分钟硬上限兜底）
+- 构建与包身份：bash build-manual.sh 全量通过；aapt badging 实测 versionCode 58 / versionName 1.34.0；dex 内实查 rebase、songdu:noteCue 在位。APK size 43037855、md5 a7adcd748829ba2e79758be354524e6c、sha256 c7044187b3fbc871cf5db7a4d039c9729502ff6af28aebbce730f08b07ca277d；tools/check_single_writer.sh 绿灯（未触碰遍数记账）
+- 发布状态：本地就绪（提交＋tag v1.34.0），未推送、未建 Release、未传 Drive——待主 agent 复核 diff 后另行发布。（v1.33.0 的 Gitee 附件补传与回填是另一摊，与本版无关，本版未动）
+
 ## [1.33.0] - 2026-11-27
 
 发布提交：待发布时回填 · 标签 v1.33.0（本地已打、未推送）
