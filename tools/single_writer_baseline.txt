@@ -1,12 +1,11 @@
 # 遍数统计写入点基线（由 tools/check_single_writer.sh --write-baseline 生成）
 # 格式：相对路径|被调用的写方法|该文件内调用次数。账本实现文件本身不计。
-# 生成日期：2026-11-26；生成前请人工逐条复核下面每一行都是已知、合法的写入点。
+# 生成日期：2026-11-26；2026-11-28 复核：自动记账收进 PassCounter，手动改数的写入点不动。
 app/src/main/java/com/ti/songdu/ChapterListActivity.java|addManual|1
 app/src/main/java/com/ti/songdu/ChapterListActivity.java|adjustChapterToday|3
 app/src/main/java/com/ti/songdu/MainActivity.java|adjustChapterToday|1
 app/src/main/java/com/ti/songdu/MainActivity.java|setTrackCountOn|1
+app/src/main/java/com/ti/songdu/PassCounter.java|addAuto|1
+app/src/main/java/com/ti/songdu/PassCounter.java|increment|1
 app/src/main/java/com/ti/songdu/PlanStore.java|addManual|3
-app/src/main/java/com/ti/songdu/PlayerService.java|addAuto|1
-app/src/main/java/com/ti/songdu/PlayerService.java|increment|3
-app/src/main/java/com/ti/songdu/ReaderActivity.java|increment|1
 app/src/main/java/com/ti/songdu/TrackSettingsActivity.java|setTrackCountOn|1

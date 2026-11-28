@@ -336,6 +336,8 @@ public class MainActivity extends Activity implements PlayerService.Listener {
         }
 
         showPage(0);
+        // 上次听到章尾时进程被杀掉的那一遍，先补进账再画列表，打开就能看见
+        PassCounter.get(this).settleSavedSession();
         refreshAll();
 
         // v1.11.0 悬浮字幕冷启动口径（状态在 overlay_prefs，与设置页/播放器钮同一份）：

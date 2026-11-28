@@ -10,8 +10,8 @@ android {
         applicationId 'com.ti.songdu'
         minSdk 26
         targetSdk 34
-        versionCode 50
-        versionName "1.26.0"
+        versionCode 59
+        versionName "1.35.0"
     }
 
     buildTypes {

@@ -1620,7 +1620,9 @@ public class ReaderActivity extends Activity implements PlayerService.Listener {
         public void finishRead() {
             runOnUiThread(() -> {
                 if (finishDialogShowing) return;
-                store.increment(track, LocalDate.now());
+                int lunyuChapter = ContentRepo.lunyuChapterIndex(track);
+                PassCounter.get(ReaderActivity.this).recordManualFinish(track,
+                        lunyuChapter >= 0 ? "lunyu" : null, lunyuChapter);
                 if (PlayerService.instance != null) PlayerService.instance.refreshStats();
                 finishDialogShowing = true;
                 int today = store.trackToday(track);
