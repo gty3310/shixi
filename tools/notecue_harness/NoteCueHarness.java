@@ -192,6 +192,52 @@ public class NoteCueHarness {
             check("cue key: sentId is trigger sentence id",
                     "sent-3".equals(cues.get(0).sentId));
         }
+        // ---- 12. 同一条注不念第二遍（v1.36：提前触发 + 播放器只建一次 + 落点重定） ----
+        {
+            NoteCueTracker t = new NoteCueTracker();
+            t.setCues(new long[]{10000, 20000});
+            // 1.5 倍速提前量约 63ms：还没到句末就到点
+            check("replay: due just before fire", t.dueIndex(9940, 63) == 0);
+            check("replay: begin once", t.begin(0));
+            check("replay: begin again rejected", !t.begin(0));
+            check("replay: no second due while leading in", t.dueIndex(9940, 63) == -1);
+            check("replay: player claimed once", t.claimPlayer());
+            check("replay: second claim rejected", !t.claimPlayer());
+            t.markSpeaking();
+            t.finish();
+            // 念完接回正文，位置仍在触发点之前：不能再待发
+            check("replay: resume before fire does not re-due", t.dueIndex(9940, 63) == -1);
+            t.resync(9940); // 表重建 / 进度抖动落在同一点
+            check("replay: resync at pause pos keeps it spoken",
+                    t.nextIndex() == 1 && t.dueIndex(9940, 63) == -1);
+            t.resync(10000); // 已经过了触发点
+            check("replay: resync past fire still spoken", t.nextIndex() == 1);
+            // 用户拖回这一句开头（远早于触发点）才可以再念
+            t.resync(2000);
+            check("replay: seek back into the sentence re-arms",
+                    t.nextIndex() == 0 && t.dueIndex(9940, 63) == 0);
+        }
+        {
+            NoteCueTracker t = new NoteCueTracker();
+            t.setCues(new long[]{1000, 3000, 8000});
+            check("replay: begin last at track end skips the middle", t.begin(2));
+            t.finish();
+            check("replay: after track-end note, nothing pending", t.nextIndex() == -1);
+            t.resync(0); // 单章循环回到章首：三注都重新待发
+            check("replay: chapter restart re-arms all", t.nextIndex() == 0 && t.dueIndex(1000, 50) == 0);
+        }
+        {
+            // 改速 seek 只偏了一帧（约 30ms），已经念过的注不重开；还没念的下一注不受影响
+            NoteCueTracker t = new NoteCueTracker();
+            t.setCues(new long[]{5000, 9000});
+            t.begin(0);
+            t.claimPlayer();
+            t.markSpeaking();
+            t.finish();
+            t.resync(4970);
+            check("replay: speed-seek jitter does not repeat the note", t.nextIndex() == 1);
+            check("replay: next note still due at its own fire", t.dueIndex(8960, 50) == 1);
+        }
         // ---- 11. ZipExtract：正常解压 + 越界条目拒绝 ----
         {
             try {

@@ -1,0 +1,34 @@
+  PASS end==duration: samples alone do not count
+  PASS end==duration: in the tail before the end
+  PASS end==duration: track end counts chapter once
+  PASS end==duration: chapter index is the global one
+  PASS end==duration: second completion is a no-op
+  PASS note cancelled: still exactly one chapter and one track
+  PASS leave in tail: not counted before leaving
+  PASS leave in tail: chapter and track both count
+  PASS leave in tail: leaving again does not double
+  PASS leave in the middle: no count
+  PASS seek to end: chapter not counted, track counted once
+  PASS seek past the end after listening: the drag itself does not count the chapter
+  PASS seek into the tail after listening the body: finishing still counts
+  PASS whole book: two chapters and one track
+  PASS whole book: track end does not add a third chapter
+  PASS leave mid-book in chapter tail: that chapter only
+  PASS single-chapter loop: two rounds, two chapters and two tracks
+  PASS pause samples do not count
+  PASS resume then finish: one chapter
+  PASS 1.5x grid: still short of a count before the end
+  PASS 1.5x grid: track end counts once
+  PASS speed-restart glitch: still one pass
+  PASS killed in tail: snapshot says the chapter is due
+  PASS killed in tail: settling counts once
+  PASS killed in tail: settling again is a no-op
+  PASS resume in the same tail: no second pass
+  PASS rewind after the sealed pass: a new listen counts
+  PASS killed in the body: nothing due
+  PASS resume from the body and finish: one pass
+  PASS follow finish and player completion: one pass
+  PASS two chapters in a row: two passes, distinct keys
+  PASS gap smaller than one sample: counted on the crossing
+  PASS gap smaller than one sample: file end does not double
+33 passed, 0 failed

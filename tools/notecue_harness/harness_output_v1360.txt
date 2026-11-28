@@ -1,0 +1,50 @@
+  PASS plan basic: one cue for block 0-2
+  PASS plan basic: cue at flat 2, fire=2900
+  PASS plan basic: block range kept
+  PASS plan priority: selected jizhu wins
+  PASS plan priority: selected zhijie wins
+  PASS plan fallback: gengfu selected, zj used
+  PASS plan fallback: daodu selected, zj used
+  PASS plan nested: two cues
+  PASS plan nested: inner first (flat 3)
+  PASS plan nested: outer last (flat 5)
+  PASS plan noAudio: two cues
+  PASS plan noAudio: mid cue fires at next audio start (2000)
+  PASS plan noAudio: tail cue fires at prev audio end (2900)
+  PASS plan scale: two cues
+  PASS plan scale: fire halved (900, 2400)
+  PASS plan empty: no cues
+  PASS plan empty: null input
+  PASS tracker: not due at 899 (early 100)
+  PASS tracker: due at 900 (early 100)
+  PASS tracker: dueIndex does not consume
+  PASS tracker: wrong markFired ignored
+  PASS tracker: advanced after markFired
+  PASS tracker resync: cues <= pos consumed
+  PASS tracker resync: seek back re-arms
+  PASS tracker resync: past end -> none
+  PASS tracker resync: just before last
+  PASS tracker consumeUpTo: pointer past idx
+  PASS tracker consumeUpTo: behind is no-op
+  PASS tracker consumeUpTo: last consumed
+  PASS cue key: one cue at block end (flat 3)
+  PASS cue key: keySentId is block-start sentence id
+  PASS cue key: sentId is trigger sentence id
+  PASS replay: due just before fire
+  PASS replay: begin once
+  PASS replay: begin again rejected
+  PASS replay: no second due while leading in
+  PASS replay: player claimed once
+  PASS replay: second claim rejected
+  PASS replay: resume before fire does not re-due
+  PASS replay: resync at pause pos keeps it spoken
+  PASS replay: resync past fire still spoken
+  PASS replay: seek back into the sentence re-arms
+  PASS replay: begin last at track end skips the middle
+  PASS replay: after track-end note, nothing pending
+  PASS replay: chapter restart re-arms all
+  PASS replay: speed-seek jitter does not repeat the note
+  PASS replay: next note still due at its own fire
+  PASS zip: extracts files incl nested
+  PASS zip: ../ entry rejected
+NoteCueHarness: 49 passed, 0 failed

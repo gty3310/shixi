@@ -137,7 +137,21 @@ public class PlayerService extends Service {
     /** 识读会话期间置真：章监测暂停（识读是用户领读、不是自然整段播放，不触发章计数）。
      *  由 ReaderActivity 在识读开始/停止时设置；跟读则直接看 followEnabled */
     public boolean chapterSuspended = false;
-    private final ChapterProgressTracker chapterTracker = new ChapterProgressTracker();
+    /** 一遍完成的唯一判定。界面、前后台、循环都不另写账。 */
+    private final PassMonitor passMonitor = new PassMonitor();
+    private PassCounter passCounter;
+    private static final int ATTACH_NEW = 0;
+    private static final int ATTACH_REPLAY = 1;
+    private static final int ATTACH_KEEP = 2;
+    /** 下一次装载完成后怎么接上监测：新开一条、播完后的重播、切声后续播 */
+    private int attachMode = ATTACH_NEW;
+    /**
+     * 这一遍已经在章采样里记过并做过回绕/停下。紧接着的播完回调只是同一遍的回声，
+     * 不能再记一次，也不能再去决定播哪一首。
+     */
+    private boolean boundaryHandled;
+    private long boundaryHandledAt;
+    private int passSavedRev = -1;
     private String chapterBookId = null;
     /** 当前曲目内容包章界（音频轴、已按 scale 缩放）与全局章序号偏移（论语单篇曲目 = 篇序） */
     private long[] chStarts = new long[0];
@@ -188,15 +202,25 @@ public class PlayerService extends Service {
     private void setupChapterMonitor() {
         chStarts = new long[0]; chEnds = new long[0];
         chapterBookId = null; chTrackId = null; chGlobalOffset = 0;
-        chapterTracker.setChapters(chStarts, chEnds);
-        if (current == null) return;
+        if (current == null) {
+            attachPassMonitor();
+            return;
+        }
         try {
             ContentRepo.Book b = ContentRepo.bookForVoice(this, current, activeVoice);
             if (b == null) b = ContentRepo.bookForTrack(this, current);
-            if (b == null || b.chapters.isEmpty()) return;
+            if (b == null || b.chapters.isEmpty()) {
+                chTrackId = current.id;
+                attachPassMonitor();
+                return;
+            }
             String bid = PlanBooks.bookIdOfTrackFull(current);
             if (bid == null) bid = b.bookId;
-            if (bid == null) return;
+            if (bid == null) {
+                chTrackId = current.id;
+                attachPassMonitor();
+                return;
+            }
             double scale = ContentRepo.scaleFor(current, b);
             java.util.List<Long> ss = new java.util.ArrayList<>();
             java.util.List<Long> ee = new java.util.ArrayList<>();
@@ -211,7 +235,11 @@ public class PlayerService extends Service {
                 ss.add(Math.round(st * scale));
                 ee.add(Math.round(en * scale));
             }
-            if (ee.isEmpty()) return;
+            if (ee.isEmpty()) {
+                chTrackId = current.id;
+                attachPassMonitor();
+                return;
+            }
             chStarts = new long[ss.size()];
             chEnds = new long[ee.size()];
             for (int i = 0; i < ss.size(); i++) { chStarts[i] = ss.get(i); chEnds[i] = ee.get(i); }
@@ -219,56 +247,120 @@ public class PlayerService extends Service {
             chTrackId = current.id;
             int lunyuIdx = ContentRepo.lunyuChapterIndex(current);
             chGlobalOffset = (b.chapters.size() == 1 && lunyuIdx > 0) ? lunyuIdx : 0;
-            chapterTracker.setChapters(chStarts, chEnds);
             if (chapterPlayback && cpBookId != null && cpBookId.equals(bid)) {
                 // 章级播放装载完成：本地章下标按全局序号换算
                 cpChapterLocal = cpChapterGlobal - chGlobalOffset;
             }
         } catch (Exception ignored) {
             chStarts = new long[0]; chEnds = new long[0]; chapterBookId = null;
+            if (current != null) chTrackId = current.id;
+        }
+        attachPassMonitor();
+    }
+
+    /** 章界表装好之后，把「这一遍听到哪」接到唯一判定上。 */
+    private void attachPassMonitor() {
+        if (passCounter == null) return;
+        int mode = attachMode;
+        attachMode = ATTACH_NEW;
+        String tid = current == null ? "" : current.id;
+        String bid = chapterBookId == null ? "" : chapterBookId;
+        // 用已经写进曲目的目标位置，不用播放器此刻的读数：seekTo 是异步的，
+        // 刚准备好时读出来常常还是 0，会把续播误当成从头听。
+        long pos = current == null ? 0 : current.positionMs;
+        if (mode == ATTACH_REPLAY && passMonitor.sameTrack(tid)) {
+            passMonitor.rewindTo(0, pos);
+        } else if (mode == ATTACH_KEEP && passMonitor.sameTrack(tid)) {
+            passMonitor.retarget(pos);
+        } else if (passMonitor.sameTrack(tid) && passMonitor.isLive()) {
+            passMonitor.onSeek(pos);
+        } else {
+            passMonitor.loadTrack(tid, bid, chGlobalOffset, chStarts, chEnds);
+            if (chEnds.length > 0) passMonitor.onSeek(pos);
+        }
+        String sealTrack = passCounter.peekSealedTrack();
+        int sealChapter = passCounter.peekSealedChapter();
+        if (sealTrack.length() > 0 && sealTrack.equals(tid)) {
+            // 只有续播还停在章尾区才封住这一遍。从头再听是新的一遍，照常记。
+            if (passMonitor.positionInOpenTail(pos, sealChapter)) {
+                passMonitor.sealChapter(sealChapter);
+            }
+            passCounter.clearSeal();
+        }
+        persistPass();
+    }
+
+    private void markBoundaryHandled() {
+        boundaryHandled = true;
+        boundaryHandledAt = SystemClock.uptimeMillis();
+    }
+
+    private void persistPass() {
+        if (passCounter == null) return;
+        passMonitor.stampDate(LocalDate.now().toString());
+        if (passMonitor.revision() == passSavedRev) return;
+        passSavedRev = passMonitor.revision();
+        passCounter.saveSnapshot(passMonitor.snapshot());
+    }
+
+    private void commitPass(java.util.List<PassMonitor.Event> ev) {
+        if (passCounter == null || ev == null || ev.isEmpty()) {
+            persistPass();
+            return;
+        }
+        int n = passCounter.commitAll(ev);
+        persistPass();
+        if (n > 0) {
+            if (listener != null) listener.onCountChanged();
+            updateNotification();
         }
     }
 
-    private void countChapter(int localIdx) {
-        if (chapterBookId == null || localIdx < 0) return;
-        ChapterStatsStore.get(this).addAuto(
-                chapterBookId, chGlobalOffset + localIdx, java.time.LocalDate.now(), 1);
-        if (listener != null) listener.onCountChanged();
-    }
-
-    /** 章监测一拍（250ms）：跟读/识读会话、重播重建、未播放时不判定 */
+    /**
+     * 章监测一拍（250ms）。记不记只问 PassMonitor；这里只在「已经记上」之后
+     * 决定回绕还是停。跟读也喂位置（否则跟读听完的章不会进分章账），
+     * 但不在这里回绕。识读是用户领读，不喂。
+     */
     private void chapterStep() {
-        if (mp == null || !prepared || !playing || preparing || restarting) return;
-        if (followEnabled || chapterSuspended) return;
-        if (current == null || chEnds.length == 0 || chapterBookId == null) return;
-        if (!current.id.equals(chTrackId)) { setupChapterMonitor(); if (chEnds.length == 0) return; }
+        if (mp == null || !prepared || preparing || restarting) return;
+        if (speedRestarter.isRestarting()) return;
+        if (current == null || !current.id.equals(chTrackId)) {
+            if (current != null) setupChapterMonitor();
+            if (chEnds.length == 0) return;
+        }
         long pos;
         try { pos = mp.getCurrentPosition(); } catch (Exception e) { return; }
-        java.util.List<Integer> counted = chapterTracker.feed(pos, true);
-        for (int localIdx : counted) {
-            countChapter(localIdx);
-            CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
-                    loopEnabled, loopScopeChapter, chapterPlayback);
-            boolean isCpChapter = chapterPlayback && localIdx == cpChapterLocal;
-            if (chapterPlayback && !isCpChapter && !loopScopeChapter) {
-                // 章级播放但已越过目标章（装载错位兜底）：按目标章尾处理
-                isCpChapter = localIdx > cpChapterLocal;
-            }
-            if (isCpChapter) {
-                // v1.31.0：章界处正赶上要念的注——先念注，章界动作押后（别把注掐断）
-                if (deferChapterForNote(localIdx, true, pos)) return;
-                if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
-                    wrapToChapterStart(localIdx);
-                } else {
-                    stopAtChapterEnd();
-                }
-                return;
-            }
-            if (!chapterPlayback && act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
-                if (deferChapterForNote(localIdx, false, pos)) return;
-                wrapToChapterStart(localIdx);
-                return;
-            }
+        if (chapterSuspended || !playing) {
+            // 暂停、念注、识读：只记住位置，不记遍，也不把「已经越尾」写死
+            passMonitor.onSample(pos, false);
+            persistPass();
+            return;
+        }
+        if (chEnds.length == 0 || chapterBookId == null) return;
+        java.util.List<PassMonitor.Event> ev = passMonitor.onSample(pos, true);
+        int earnedGlobal = -1;
+        for (PassMonitor.Event e : ev) if (e.chapter) earnedGlobal = e.chapterIndex;
+        commitPass(ev);
+        if (followEnabled || earnedGlobal < 0) return;
+        int localIdx = earnedGlobal - chGlobalOffset;
+        CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
+                loopEnabled, loopScopeChapter, chapterPlayback);
+        boolean isCpChapter = chapterPlayback && localIdx == cpChapterLocal;
+        if (chapterPlayback && !isCpChapter && !loopScopeChapter && localIdx > cpChapterLocal) {
+            isCpChapter = true;
+        }
+        if (isCpChapter) {
+            // 遍数已经落账。念注只押后回绕/停下，取消念注也不会把账撤掉。
+            markBoundaryHandled();
+            if (deferChapterForNote(localIdx, true, pos)) return;
+            if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) wrapToChapterStart(localIdx);
+            else stopAtChapterEnd();
+            return;
+        }
+        if (!chapterPlayback && act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
+            markBoundaryHandled();
+            if (deferChapterForNote(localIdx, false, pos)) return;
+            wrapToChapterStart(localIdx);
         }
     }
 
@@ -280,7 +372,8 @@ public class PlayerService extends Service {
         } catch (Exception ignored) {
         }
         if (current != null) current.positionMs = start;
-        chapterTracker.resetToChapter(localIdx, start);
+        passMonitor.rewindTo(localIdx, start); // 回绕是明确的下一遍
+        persistPass();
         resyncNoteCues(start); // v1.31.0：回绕后念注指针按新落点重定（本章注重新待发）
         updateNotification();
         notifyState();
@@ -309,7 +402,6 @@ public class PlayerService extends Service {
         chapterPlayback = true;
         if (current != null && current.id.equals(t.id) && prepared && mp != null) {
             cpChapterLocal = chapterGlobal - chGlobalOffset;
-            chapterTracker.resetToChapter(Math.max(0, cpChapterLocal), startMs);
             seekToPosition(startMs);
             if (!playing) resume();
             updateNotification();
@@ -956,11 +1048,11 @@ public class PlayerService extends Service {
      * 阶段回 IDLE，跟读开关保持开。
      */
     private void finishFollowPass() {
+        // 跟读听完与普通播完同一笔账（章 + 曲目），不在这里另写。
+        commitPass(passMonitor.onTrackEnded());
         if (current != null) {
-            store.increment(current, LocalDate.now());
             current.positionMs = 0;
             store.saveTracks();
-            if (listener != null) listener.onCountChanged();
         }
         followPhase = FOLLOW_IDLE;
         followIndex = -1;
@@ -1270,7 +1362,8 @@ public class PlayerService extends Service {
         if (ncCues == null || idx < 0 || idx >= ncCues.size()) return false;
         NoteCuePlan.Cue cue = ncCues.get(idx);
         if (cue.text == null || cue.text.isEmpty()) return false;
-        ncTracker.consumeUpTo(idx);
+        // 占用这一条只发生一次。已经在念、或这一遍念过，begin 返回 false，不再开第二遍。
+        if (!ncTracker.begin(idx)) return false;
         noteState = NOTE_LEADIN;
         noteCueIdx = idx;
         noteCueFlat = cue.flat;
@@ -1295,6 +1388,9 @@ public class PlayerService extends Service {
             concludeNote();
             return;
         }
+        // 前导的 50ms 轮询会反复走到这里。播放器只建一次，
+        // 否则准备稍慢就会把已经开口的那一遍停掉、再从头念一遍。
+        if (!ncTracker.claimPlayer()) return;
         try {
             releaseNotePlayer();
             noteMp = new MediaPlayer();
@@ -1309,6 +1405,7 @@ public class PlayerService extends Service {
                 } catch (Exception ignored) {
                 }
                 noteState = NOTE_SPEAKING;
+                ncTracker.markSpeaking();
                 try {
                     p.start();
                 } catch (Exception ignored) {
@@ -1362,6 +1459,7 @@ public class PlayerService extends Service {
      */
     private void concludeNote() {
         if (noteState == NOTE_IDLE) return;
+        ncTracker.finish(); // 这一条保持已念过，接回正文不会因为还没过触发点再念一遍
         releaseNoteWakeLock(); // v1.34.0：在途窗口结束（去向由下方分支接管正文/章界/整轨）
         int after = noteAfter;
         boolean wasPlaying = noteWasPlaying;
@@ -1396,7 +1494,8 @@ public class PlayerService extends Service {
             return;
         }
         if (after == NOTE_AFTER_COMPLETION) {
-            handleTrackCompletion();
+            // 账在进入念注之前已经记过，这里只续行去向
+            navigateAfterTrackEnd();
             return;
         }
         if (wasPlaying) resumeMainAfterNote();
@@ -1410,6 +1509,7 @@ public class PlayerService extends Service {
      * 停止由调用方自己的流程接管正文。
      */
     private void cancelNoteCue() {
+        ncTracker.finish(); // 用户停掉也算这一遍已经处理过，松手不会自动再念
         releaseNotePlayer();
         releaseNoteWakeLock(); // v1.34.0：与 concludeNote 并列的唯二出口之一
         noteState = NOTE_IDLE;
@@ -1447,8 +1547,8 @@ public class PlayerService extends Service {
 
     /**
      * 整轨自然播完时先问念注：末句（或末段无录音句）的注还没念则先念，
-     * 整轨完成处理（计数与去向）押后到注后（concludeNote 续行
-     * handleTrackCompletion）。接管成功返回 true。
+     * 去向押后到注后（concludeNote 续行 navigateAfterTrackEnd）。
+     * 遍数不在这里押后：调用方必须已经记过账。接管成功返回 true。
      */
     private boolean tryNoteCueAtTrackEnd() {
         if (!noteCuesEnabled || noteState != NOTE_IDLE) return false;
@@ -1476,6 +1576,9 @@ public class PlayerService extends Service {
         instance = this;
         store = Store.get(this);
         store.installPresetsIfNeeded(); // 与 MainActivity 双入口，靠 presetsDone 标记保证只做一次
+        passCounter = PassCounter.get(this);
+        passCounter.settleSavedSession(); // 上次死在章尾区的那一遍，打开就补上
+        passMonitor.setSession(passCounter.sessionId());
         // v1.4.3：恢复跟读开关态（只恢复开关，冷启动不自动开播、不进 gap）
         followEnabled = getSharedPreferences(FOLLOW_PREFS, MODE_PRIVATE)
                 .getBoolean("enabled", false);
@@ -1721,15 +1824,13 @@ public class PlayerService extends Service {
                 // 普通点播/续播才跳到上次位置；重播（restarting）位置已清零，从头播
                 long start = current.positionMs;
                 if (effDur > 0 && start >= effDur - 1000) start = 0;
+                current.positionMs = start;
                 if (start > 0) p.seekTo((int) start);
             }
             pendingSeekMs = -1;
             pendingSeekTrackId = null;
-            setupChapterMonitor(); // v1.21.0：新装载按本曲目重建章界表
-            if (chapterPlayback && cpSetupArmed) {
-                cpSetupArmed = false;
-                chapterTracker.resetToChapter(Math.max(0, cpChapterLocal), current != null ? current.positionMs : 0);
-            }
+            setupChapterMonitor(); // 装载完成：章界表 + 把这一遍接到 PassMonitor
+            if (chapterPlayback && cpSetupArmed) cpSetupArmed = false;
             if (holdAfterPrepare) {
                 // v1.17.0：切声前是暂停态——装载就位但不开播，位置停在映射后的句首
                 holdAfterPrepare = false;
@@ -1757,8 +1858,13 @@ public class PlayerService extends Service {
                 finishFollowPass();
                 return;
             }
-            // v1.31.0：末句的注先念，整轨完成处理押后（注后由 concludeNote 续行 handleTrackCompletion）
-            if (tryNoteCueAtTrackEnd()) return;
+            // 章采样已经记过并回绕/停下时，这声播完是同一遍的回声。
+            if (boundaryHandled) {
+                boundaryHandled = false;
+                // 回绕之后马上送来的播完是同一遍的回声。下一遍真正播完会晚得多，照常记。
+                if (SystemClock.uptimeMillis() - boundaryHandledAt < 1200) return;
+            }
+            // 先落账，再问念注。注可以押后「接下来播哪」，不能押后「这一遍算不算」。
             handleTrackCompletion();
         });
         mp.setOnErrorListener((p, what, extra) -> {
@@ -1772,29 +1878,38 @@ public class PlayerService extends Service {
         });
     }
 
-    /** 整轨完成处理本体（v1.31.0 从 onCompletion 监听器抽出：念注押后时由 concludeNote 续行，行为与原监听器内联版一致） */
+    /**
+     * 整轨自然播完。记账在最前面，而且只做一次；念注最多押后「接下来播哪」。
+     * 用户在念注时暂停、切章或进程被杀，已经记下的这一遍不会被撤掉。
+     */
     private void handleTrackCompletion() {
-        // v1.21.0：整轨自然播完先补章账（末章在 onCompletion 前未被位置采样越界时兜底；
-        // 跟读路径已在上方return、识读不经播放器，故不会误入此账）
-        if (!chapterSuspended && chEnds.length > 0 && chapterBookId != null
-                && current != null && current.id.equals(chTrackId)) {
-            int flushed = chapterTracker.flushAtTrackEnd();
-            if (flushed >= 0) countChapter(flushed);
+        if (!chapterSuspended) commitPass(passMonitor.onTrackEnded());
+        else commitPass(trackOnlyEnd());
+        if (current != null) {
+            current.positionMs = 0;
+            store.saveTracks();
         }
-        // v1.21.0：章级播放的整轨即一章（论语篇轨）：计数已在上方完成，
-        // 去向按章界口径——单章范围+循环开回绕、整书范围停在章尾，不接整本
+        if (tryNoteCueAtTrackEnd()) return;
+        navigateAfterTrackEnd();
+    }
+
+    /** 识读会话里整轨结束：不补章（不是在听），曲目一遍仍按原口径记。 */
+    private java.util.List<PassMonitor.Event> trackOnlyEnd() {
+        java.util.List<PassMonitor.Event> all = passMonitor.onTrackEnded();
+        java.util.List<PassMonitor.Event> tracks = new java.util.ArrayList<>();
+        for (PassMonitor.Event e : all) if (!e.chapter) tracks.add(e);
+        return tracks;
+    }
+
+    /** 整轨结束之后的去向（章级播放 / 循环 / 接下一首）。调用前遍数已经落账。 */
+    private void navigateAfterTrackEnd() {
         if (chapterPlayback) {
             CompletionPolicy.ChapterAction act = CompletionPolicy.chapterBoundary(
                     loopEnabled, loopScopeChapter, true);
-            if (current != null) {
-                store.increment(current, LocalDate.now());
-                current.positionMs = 0;
-                store.saveTracks();
-                if (listener != null) listener.onCountChanged();
-            }
             if (act == CompletionPolicy.ChapterAction.WRAP_CHAPTER) {
                 chapterPlayback = true; // replayFromStart 内部 playTrack 会按标记保住章态
                 cpSetupArmed = true;
+                attachMode = ATTACH_REPLAY;
                 replayFromStart();
             } else {
                 playing = false;
@@ -1803,15 +1918,6 @@ public class PlayerService extends Service {
             updateNotification();
             notifyState();
             return;
-        }
-        // 一遍完整播完：先计数落盘、位置清零，再走全量重建路径重播（单曲循环）。
-        // 不再用 v1.0 的 seekTo(0)+start()：PlaybackCompleted 状态下异步 seek 与
-        // start 竞速，在真机上会出现第二遍无声（本次 bug）。
-        if (current != null) {
-            store.increment(current, LocalDate.now());
-            current.positionMs = 0;
-            store.saveTracks();
-            if (listener != null) listener.onCountChanged();
         }
         // v1.20.7：播完去向统一走 CompletionPolicy（与跟读 finishFollowPass
         // 同一判定）：循环开→计数后从头重播；循环关→自动接可接的下一本
@@ -1920,6 +2026,7 @@ public class PlayerService extends Service {
         activeVoice = voice;
         VoicePref.setPosVoice(this, bookId, voice);
         current.positionMs = newPos;
+        attachMode = ATTACH_KEEP; // 同一遍换时间轴，不新开一遍
         // 跟读段轴失效（保留开关态），状态机下个 tick 按新时间轴重建并接上
         foTrackId = null;
         foStart = null;
@@ -1974,6 +2081,7 @@ public class PlayerService extends Service {
      *  调用方的 notifyState 会把状态落回暂停，不假装还在播。 */
     private void replayFromStart() {
         if (current == null) return;
+        attachMode = ATTACH_REPLAY;
         ensurePlayer();
         restarting = true;
         prepared = false;
@@ -2015,8 +2123,11 @@ public class PlayerService extends Service {
             notifyState();
             return;
         }
+        // 切到别的音频：已经听进章尾的那一章在这里补记，听到一半的不记
+        if (current != null && !current.id.equals(t.id)) commitPass(passMonitor.onLeave());
         // 切换音频前，先保存旧音频的位置
         saveCurrentPosition();
+        attachMode = ATTACH_NEW;
         ensurePlayer();
         restarting = false;
         try {
@@ -2085,8 +2196,7 @@ public class PlayerService extends Service {
 
     public void pause() {
         if (noteState != NOTE_IDLE) {
-            // v1.31.0：念注中点暂停＝中止本条注、就此停住（押后的章界/整轨完成
-            // 一并作废，用户接管；正文播放器本就停着，不再动它）
+            // 念注中点暂停＝中止本条注、不去自动跳下一首。已经记下的那一遍不撤回。
             cancelNoteCue();
             updateNotification();
             notifyState();
@@ -2113,6 +2223,7 @@ public class PlayerService extends Service {
             playing = false;
         }
         saveCurrentPosition();
+        persistPass();
         updateNotification();
         notifyState();
     }
@@ -2157,6 +2268,7 @@ public class PlayerService extends Service {
     }
 
     public void stopAll() {
+        commitPass(passMonitor.onLeave());
         cancelNoteCue(); // v1.31.0：停止时先把念注播放器摘掉，别留孤儿声音
         saveCurrentPosition();
         abandonFocus();
@@ -2190,6 +2302,8 @@ public class PlayerService extends Service {
         try {
             mp.seekTo((int) target);
             current.positionMs = target;
+            passMonitor.onSeek(target);
+            persistPass();
             store.saveTracks();
             if (listener != null) listener.onProgress(current.id, target, effDurationMs());
             syncSession();
@@ -2488,6 +2602,7 @@ public class PlayerService extends Service {
             overlay = null;
         }
         handler.removeCallbacks(ticker);
+        persistPass();
         stopFollowLoop();
         stopChapterLoop();
         stopNoteLoop(); // v1.31.0
