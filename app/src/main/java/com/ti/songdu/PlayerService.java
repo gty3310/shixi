@@ -1362,7 +1362,8 @@ public class PlayerService extends Service {
         if (ncCues == null || idx < 0 || idx >= ncCues.size()) return false;
         NoteCuePlan.Cue cue = ncCues.get(idx);
         if (cue.text == null || cue.text.isEmpty()) return false;
-        ncTracker.consumeUpTo(idx);
+        // 占用这一条只发生一次。已经在念、或这一遍念过，begin 返回 false，不再开第二遍。
+        if (!ncTracker.begin(idx)) return false;
         noteState = NOTE_LEADIN;
         noteCueIdx = idx;
         noteCueFlat = cue.flat;
@@ -1387,6 +1388,9 @@ public class PlayerService extends Service {
             concludeNote();
             return;
         }
+        // 前导的 50ms 轮询会反复走到这里。播放器只建一次，
+        // 否则准备稍慢就会把已经开口的那一遍停掉、再从头念一遍。
+        if (!ncTracker.claimPlayer()) return;
         try {
             releaseNotePlayer();
             noteMp = new MediaPlayer();
@@ -1401,6 +1405,7 @@ public class PlayerService extends Service {
                 } catch (Exception ignored) {
                 }
                 noteState = NOTE_SPEAKING;
+                ncTracker.markSpeaking();
                 try {
                     p.start();
                 } catch (Exception ignored) {
@@ -1454,6 +1459,7 @@ public class PlayerService extends Service {
      */
     private void concludeNote() {
         if (noteState == NOTE_IDLE) return;
+        ncTracker.finish(); // 这一条保持已念过，接回正文不会因为还没过触发点再念一遍
         releaseNoteWakeLock(); // v1.34.0：在途窗口结束（去向由下方分支接管正文/章界/整轨）
         int after = noteAfter;
         boolean wasPlaying = noteWasPlaying;
@@ -1503,6 +1509,7 @@ public class PlayerService extends Service {
      * 停止由调用方自己的流程接管正文。
      */
     private void cancelNoteCue() {
+        ncTracker.finish(); // 用户停掉也算这一遍已经处理过，松手不会自动再念
         releaseNotePlayer();
         releaseNoteWakeLock(); // v1.34.0：与 concludeNote 并列的唯二出口之一
         noteState = NOTE_IDLE;
